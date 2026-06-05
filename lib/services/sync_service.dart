@@ -87,6 +87,8 @@ class SyncService {
             amount: (row['amount'] ?? 0) as int,
             paymentMethod: PaymentMethodType.fromApi(row['payment_method'] as String?),
             note: row['note'] as String?,
+            requestName: row['request_name'] as String?,
+            requestAccNumber: row['request_acc_number'] as String?,
           );
         } else {
           await api.updateSavings(

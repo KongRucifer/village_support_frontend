@@ -23,7 +23,7 @@ class LocalDb {
     final path = p.join(dir, 'village_support.db');
     return openDatabase(
       path,
-      version: 6,
+      version: 7,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
           await db.execute('ALTER TABLE account_owners ADD COLUMN pending INTEGER DEFAULT 0');
@@ -46,12 +46,17 @@ class LocalDb {
         }
         if (oldV < 6) {
           // Security upgrade: replace the insecure cached_users table.
-          //   Before: password TEXT (plaintext) + token TEXT (JWT in plain SQLite).
-          //   After:  password_hash TEXT + password_salt TEXT.
-          //           JWT token is now stored in OS secure storage (Keychain/Keystore).
-          // Drop the old table (existing plain passwords are intentionally discarded).
           await db.execute('DROP TABLE IF EXISTS cached_users');
           await db.execute(_createCachedUsersSql);
+        }
+        if (oldV < 7) {
+          // Bank Transfer recipient fields in the offline outbox.
+          for (final sql in [
+            'ALTER TABLE outbox ADD COLUMN request_name TEXT',
+            'ALTER TABLE outbox ADD COLUMN request_acc_number TEXT',
+          ]) {
+            try { await db.execute(sql); } catch (_) {}
+          }
         }
       },
       onCreate: (db, version) async {
@@ -305,6 +310,8 @@ class LocalDb {
       new_balance INTEGER,
       amount INTEGER,
       payment_method TEXT DEFAULT 'Cash',
+      request_name TEXT,
+      request_acc_number TEXT,
       note TEXT,
       created_at TEXT
     )
@@ -373,6 +380,8 @@ class LocalDb {
     required String clientId,
     required int amount,
     required String paymentMethod, // 'Cash' or 'BankTransfer'
+    String? requestName,
+    String? requestAccNumber,
     String? note,
     required String createdAtIso,
   }) async {
@@ -385,6 +394,8 @@ class LocalDb {
       'client_id': clientId,
       'amount': amount,
       'payment_method': paymentMethod,
+      'request_name': requestName,
+      'request_acc_number': requestAccNumber,
       'note': note,
       'created_at': createdAtIso,
     });

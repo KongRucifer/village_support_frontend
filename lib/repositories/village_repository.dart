@@ -116,9 +116,11 @@ class VillageRepository {
     required String token,
     required AccountOwner owner,
     required int amount,
-    required int currentBalance, // live balance, for the offline calc
+    required int currentBalance,
     required PaymentMethodType paymentMethod,
     String? note,
+    String? requestName,       // Bank Transfer only
+    String? requestAccNumber,  // Bank Transfer only
   }) async {
     final online = await connectivity.isOnline() && token.isNotEmpty;
     final nowIso = DateTime.now().toIso8601String();
@@ -132,6 +134,8 @@ class VillageRepository {
           amount: amount,
           paymentMethod: paymentMethod,
           note: note,
+          requestName: requestName,
+          requestAccNumber: requestAccNumber,
         );
         await db.applyLocalSavingsEdit(
           accNumber: owner.accNumber,
@@ -179,6 +183,8 @@ class VillageRepository {
       amount: amount,
       paymentMethod: paymentMethod.apiValue,
       note: note,
+      requestName: requestName,
+      requestAccNumber: requestAccNumber,
       createdAtIso: nowIso,
     );
     await db.insertLocalWithdrawal(Withdrawal(

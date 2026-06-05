@@ -34,6 +34,17 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
   bool _processing = false;
   late int _balance = widget.owner.currentBalance;
 
+  // Bank Transfer recipient fields
+  final _reqNameCtrl   = TextEditingController();
+  final _reqAccCtrl    = TextEditingController();
+
+  @override
+  void dispose() {
+    _reqNameCtrl.dispose();
+    _reqAccCtrl.dispose();
+    super.dispose();
+  }
+
   String _money(int v) {
     final s = v.abs().toString();
     final buf = StringBuffer();
@@ -51,6 +62,18 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
       return;
     }
 
+    // Bank Transfer validation
+    if (_paymentMethod == PaymentMethodType.bankTransfer) {
+      if (_reqNameCtrl.text.trim().isEmpty) {
+        TopToast.error(context, 'ກະລຸນາປ້ອນຊື່ຜູ້ຮັບ (request_name)');
+        return;
+      }
+      if (_reqAccCtrl.text.trim().isEmpty) {
+        TopToast.error(context, 'ກະລຸນາປ້ອນເລກບັນຊີຜູ້ຮັບ (request_acc_number)');
+        return;
+      }
+    }
+
     setState(() => _processing = true);
     try {
       final outcome = await _services.village.withdrawSavings(
@@ -60,6 +83,14 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
         currentBalance: _balance,
         paymentMethod: _paymentMethod,
         note: 'ຈ່າຍເງິນ • ${_paymentMethod.shortLabel}',
+        requestName:
+            _paymentMethod == PaymentMethodType.bankTransfer
+                ? _reqNameCtrl.text.trim()
+                : null,
+        requestAccNumber:
+            _paymentMethod == PaymentMethodType.bankTransfer
+                ? _reqAccCtrl.text.trim()
+                : null,
       );
 
       if (!mounted) return;
@@ -154,7 +185,72 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
               selected: _paymentMethod,
               onChanged: (v) => setState(() => _paymentMethod = v),
             ),
-            const SizedBox(height: 32),
+
+            // ── Bank Transfer recipient fields (ສະແດງສະເພາະ Bank Transfer) ───
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeInOut,
+              child: _paymentMethod == PaymentMethodType.bankTransfer
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.account_balance, color: Colors.blue, size: 18),
+                                    SizedBox(width: 6),
+                                    Text('ຂໍ້ມູນຜູ້ຮັບໂອນ (Transfer Recipient)',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.blue)),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                // ── ຊື່ຜູ້ຮັບ
+                                TextField(
+                                  controller: _reqNameCtrl,
+                                  textCapitalization: TextCapitalization.words,
+                                  decoration: const InputDecoration(
+                                    labelText: 'ຊື່ຜູ້ຮັບ (request_name) *',
+                                    hintText: 'ທ. ສົມສີ ສີໄຊ',
+                                    prefixIcon: Icon(Icons.person_outline),
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                // ── ເລກບັນຊີຜູ້ຮັບ
+                                TextField(
+                                  controller: _reqAccCtrl,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'ເລກບັນຊີຜູ້ຮັບ (request_acc_number) *',
+                                    hintText: '010100100000001',
+                                    prefixIcon: Icon(Icons.credit_card),
+                                    border: OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            const SizedBox(height: 24),
 
             // ── Confirm button ──────────────────────────────────────────────
             FilledButton.icon(

@@ -164,6 +164,8 @@ class ApiClient {
     required int amount,
     required PaymentMethodType paymentMethod,
     String? note,
+    String? requestName,       // Bank Transfer: ຊື່ຜູ້ຮັບ
+    String? requestAccNumber,  // Bank Transfer: ເລກບັນຊີຜູ້ຮັບ
   }) async {
     final res = await _http
         .post(
@@ -174,6 +176,10 @@ class ApiClient {
             'vbCode': vbCode,
             'paymentMethod': paymentMethod.apiValue,
             if (note != null) 'note': note,
+            if (requestName != null && requestName.isNotEmpty)
+              'requestName': requestName,
+            if (requestAccNumber != null && requestAccNumber.isNotEmpty)
+              'requestAccNumber': requestAccNumber,
           }),
         )
         .timeout(AppConfig.apiTimeout);
