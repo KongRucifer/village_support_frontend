@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../services/app_services.dart';
@@ -118,19 +120,17 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
   }
 
   Future<void> _handleQrScan(String raw) async {
+    // Capture strings BEFORE async gaps (avoid BuildContext across async warning).
+    final s = context.read<AppSettings>().s;
     try {
-      // Extract accNumber from the QR (JSON object or plain text).
       final accNumber = _extractAccNumber(raw.trim());
       if (accNumber == null || accNumber.isEmpty) {
-        _err('QR ບໍ່ຖືກຕ້ອງ — ບໍ່ພົບເລກບັນຊີ');
+        _err(s.errQrInvalid);
         return;
       }
 
-      // Proactive token refresh ກ່ອນ API call (token ອາດໝົດ ໃນ 30min window).
       await _services.auth.refreshIfExpired(widget.user);
 
-      // Resolve the full owner (bankbookNumber + vbCode + balance) via backend,
-      // falling back to the local SQLite cache when offline.
       AccountOwner? owner;
       if (widget.user.token.isNotEmpty &&
           await _services.connectivity.isOnline()) {
@@ -138,25 +138,20 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
           token: widget.user.token,
           accNumber: accNumber,
         );
-        // Cache the fresh result (especially the live balance) so offline
-        // mode shows the correct balance the next time.
         if (owner != null) {
           await _services.db.upsertAccountOwners([owner]);
         }
       }
-      // Offline fallback — reads the balance from the local SQLite cache.
       owner ??= await _services.db.getAccountOwnerByAccNumber(accNumber);
 
       if (owner == null) {
-        _err('ບໍ່ພົບບັນຊີ $accNumber');
+        _err(s.errAccNotFound(accNumber));
         return;
       }
 
-      // If opened from a specific village context, enforce vbCode match.
-      // When vbCode is empty (opened from Dashboard), any village is accepted.
       if (widget.vbCode.isNotEmpty &&
           owner.vbCode.trim() != widget.vbCode.trim()) {
-        _err('ບັນຊີ $accNumber ຢູ່ VbCode ${owner.vbCode} ≠ ${widget.vbCode}');
+        _err(s.errVbMismatch(accNumber, owner.vbCode, widget.vbCode));
         return;
       }
 
@@ -173,14 +168,11 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
   // ── Document ID path ──────────────────────────────────────────────────────
   Future<void> _searchByDocument() async {
     final idNumber = _docCtrl.text.trim();
-    if (idNumber.isEmpty) {
-      _err('ກະລຸນາປ້ອນເລກໄອດີ (enter document number)');
-      return;
-    }
-    if (widget.user.token.isEmpty) {
-      _err('ບໍ່ມີ token — ກະລຸນາ login ໃໝ່ (offline)');
-      return;
-    }
+    // Capture strings BEFORE any async gap.
+    final s = context.read<AppSettings>().s;
+
+    if (idNumber.isEmpty)           { _err(s.errQrInvalid);  return; }
+    if (widget.user.token.isEmpty)  { _err(s.errNoToken);    return; }
 
     setState(() => _docSearching = true);
     try {
@@ -190,14 +182,13 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         vbCode: widget.vbCode,
       );
       if (owner == null) {
-        _err('ບໍ່ພົບ document "$idNumber" ໃນ VbCode ${widget.vbCode}');
+        _err(s.errDocNotFound(idNumber, widget.vbCode));
         return;
       }
-      // Cache the live balance so the confirm screen shows it correctly offline.
       await _services.db.upsertAccountOwners([owner]);
       await _goConfirm(owner);
     } catch (e) {
-      _err('ຜິດພາດ: ${e.toString().replaceFirst('ApiException: ', '')}');
+      _err('${s.error}: ${e.toString().replaceFirst('ApiException: ', '')}');
     } finally {
       if (mounted) setState(() => _docSearching = false);
     }
@@ -208,12 +199,13 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
   // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final s = context.watch<AppSettings>().s;
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text('ສະແກນ / ຄົ້ນຫາ', style: TextStyle(color: Colors.white)),
+        title: Text(s.scanTitle, style: const TextStyle(color: Colors.white)),
         actions: [
           IconButton(
             tooltip: 'Torch on/off',
@@ -328,37 +320,42 @@ class _BottomPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           // ── Mode toggle ─────────────────────────────────────────────────
-          Row(
-            children: [
-              Expanded(child: _ModeChip(
-                icon: Icons.qr_code_scanner,
-                label: 'Scan QR',
-                selected: mode == _InputMode.qr,
-                onTap: () => onModeChange(_InputMode.qr),
-              )),
-              const SizedBox(width: 10),
-              Expanded(child: _ModeChip(
-                icon: Icons.badge_outlined,
-                label: 'Document ID',
-                selected: mode == _InputMode.document,
-                onTap: () => onModeChange(_InputMode.document),
-              )),
-            ],
-          ),
+          Builder(builder: (ctx) {
+            final sl = ctx.watch<AppSettings>().s;
+            return Row(
+              children: [
+                Expanded(child: _ModeChip(
+                  icon: Icons.qr_code_scanner,
+                  label: sl.scanModeScan,
+                  selected: mode == _InputMode.qr,
+                  onTap: () => onModeChange(_InputMode.qr),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: _ModeChip(
+                  icon: Icons.badge_outlined,
+                  label: sl.scanModeDoc,
+                  selected: mode == _InputMode.document,
+                  onTap: () => onModeChange(_InputMode.document),
+                )),
+              ],
+            );
+          }),
 
           // ── Document ID input (visible in doc mode only) ─────────────
           AnimatedSize(
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeInOut,
             child: mode == _InputMode.document
-                ? Padding(
+                ? Builder(builder: (ctx) {
+                    final sl = ctx.watch<AppSettings>().s;
+                    return Padding(
                     padding: const EdgeInsets.only(top: 14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'ເລກໄອດີ / ເລກສຳມະໂນ (ID Document Number)',
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        Text(
+                          sl.docFieldLabel,
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
                         ),
                         const SizedBox(height: 6),
                         Row(
@@ -371,7 +368,7 @@ class _BottomPanel extends StatelessWidget {
                                 onSubmitted: (_) => onSearch(),
                                 style: const TextStyle(color: Colors.white),
                                 decoration: InputDecoration(
-                                  hintText: 'e.g. 0101001234',
+                                  hintText: sl.docFieldHint,
                                   hintStyle: const TextStyle(color: Colors.white38),
                                   prefixIcon: const Icon(Icons.badge_outlined,
                                       color: Colors.white54),
@@ -408,13 +405,14 @@ class _BottomPanel extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 6),
-                        const Text(
-                          'ຄົ້ນຫາຈາກຕາລາງ id_document → account_owner',
-                          style: TextStyle(color: Colors.white38, fontSize: 10),
+                        Text(
+                          sl.docLookupHint,
+                          style: const TextStyle(color: Colors.white38, fontSize: 10),
                         ),
                       ],
                     ),
-                  )
+                  );
+                })
                 : const SizedBox.shrink(),
           ),
         ],
@@ -560,10 +558,11 @@ class _StatusText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s    = context.watch<AppSettings>().s;
     final text = switch (state) {
-      _ScanState.ready    => 'ເລັງ QR ຂອງສະມາຊິກໃສ່ກອບ',
-      _ScanState.checking => 'ກຳລັງກວດສອບ…',
-      _ScanState.cooldown => 'ພ້ອມ scan ໃໝ່ໃນ $cooldownLeft ວິ',
+      _ScanState.ready    => s.scanHintReady,
+      _ScanState.checking => s.scanHintChecking,
+      _ScanState.cooldown => s.scanHintCooldown(cooldownLeft),
     };
     return Text(text,
         textAlign: TextAlign.center,

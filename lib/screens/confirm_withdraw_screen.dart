@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
+import '../core/widgets/settings_button.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../models/withdrawal.dart';
@@ -56,22 +59,14 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
   }
 
   Future<void> _confirm() async {
-    // Guard: balance must cover the fixed amount.
+    final s = context.read<AppSettings>().s;
     if (_balance < kPaymentAmount) {
-      TopToast.error(context, 'ຍອດຝາກບໍ່ພໍ (balance ${_money(_balance)} ₭ < ${_money(kPaymentAmount)} ₭)');
+      TopToast.error(context, s.insufficientBalance(_money(kPaymentAmount), _money(_balance)));
       return;
     }
-
-    // Bank Transfer validation
     if (_paymentMethod == PaymentMethodType.bankTransfer) {
-      if (_reqNameCtrl.text.trim().isEmpty) {
-        TopToast.error(context, 'ກະລຸນາປ້ອນຊື່ຜູ້ຮັບ (request_name)');
-        return;
-      }
-      if (_reqAccCtrl.text.trim().isEmpty) {
-        TopToast.error(context, 'ກະລຸນາປ້ອນເລກບັນຊີຜູ້ຮັບ (request_acc_number)');
-        return;
-      }
+      if (_reqNameCtrl.text.trim().isEmpty) { TopToast.error(context, s.validReqName); return; }
+      if (_reqAccCtrl.text.trim().isEmpty)  { TopToast.error(context, s.validReqAcc);  return; }
     }
 
     setState(() => _processing = true);
@@ -82,34 +77,21 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
         amount: kPaymentAmount,
         currentBalance: _balance,
         paymentMethod: _paymentMethod,
-        note: 'ຈ່າຍເງິນ • ${_paymentMethod.shortLabel}',
-        requestName:
-            _paymentMethod == PaymentMethodType.bankTransfer
-                ? _reqNameCtrl.text.trim()
-                : null,
-        requestAccNumber:
-            _paymentMethod == PaymentMethodType.bankTransfer
-                ? _reqAccCtrl.text.trim()
-                : null,
+        note: _paymentMethod.shortLabel,
+        requestName: _paymentMethod == PaymentMethodType.bankTransfer ? _reqNameCtrl.text.trim() : null,
+        requestAccNumber: _paymentMethod == PaymentMethodType.bankTransfer ? _reqAccCtrl.text.trim() : null,
       );
-
       if (!mounted) return;
-
-      final tail = outcome.synced ? '' : ' • offline, ລໍຖ້າ sync';
-      TopToast.success(
-        context,
-        'ຈ່າຍ ${_money(kPaymentAmount)} ₭ [${_paymentMethod.shortLabel}] ✓  '
-        'ຍອດ ${_money(outcome.newBalance)} ₭$tail',
-      );
-
+      final tail = outcome.synced ? '' : ' ${s.paySuccessOffline}';
+      TopToast.success(context, s.paySuccess(_money(kPaymentAmount), _paymentMethod.shortLabel, _money(outcome.newBalance)) + tail);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
-      TopToast.error(context, 'ຈ່າຍເງິນລົ້ມເຫຼວ: ${e.message}');
+      TopToast.error(context, s.payFailed(e.message));
     } catch (e) {
       if (!mounted) return;
-      TopToast.error(context, 'ຜິດພາດ: $e');
+      TopToast.error(context, '${s.error}: $e');
     } finally {
       if (mounted) setState(() => _processing = false);
     }
@@ -117,11 +99,15 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final o = widget.owner;
+    final o   = widget.owner;
+    final s   = context.watch<AppSettings>().s;
     final canPay = _balance >= kPaymentAmount;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('ຢືນຢັນການຈ່າຍ (Confirm Payment)')),
+      appBar: AppBar(
+        title: Text(s.confirmTitle),
+        actions: const [SettingsButton()],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -132,35 +118,33 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
             const SizedBox(height: 20),
 
             // ── Fixed payment amount display (read-only) ────────────────────
-            const Text('ຈຳນວນເງິນທີ່ຈ່າຍ (Payment Amount)',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(s.confirmAmountLabel,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               decoration: BoxDecoration(
-                color: Colors.deepPurple.shade50,
+                color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.deepPurple.shade200, width: 2),
+                border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4), width: 2),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('ຈຳນວນ (Amount)',
-                      style: TextStyle(color: Colors.black54, fontSize: 14)),
+                  Text(s.confirmAmountSub,
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14)),
                   Row(
                     children: [
-                      Text(
-                        '${_money(kPaymentAmount)} ₭',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.deepPurple,
-                        ),
-                      ),
+                      Text('${_money(kPaymentAmount)} ₭',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          )),
                       const SizedBox(width: 8),
-                      const Tooltip(
-                        message: 'ຈຳນວນຄົງທີ່ — ບໍ່ສາມາດປ່ຽນໄດ້',
-                        child: Icon(Icons.lock, size: 16, color: Colors.deepPurple),
+                      Tooltip(
+                        message: s.confirmAmountTooltip,
+                        child: Icon(Icons.lock, size: 16, color: Theme.of(context).colorScheme.primary),
                       ),
                     ],
                   ),
@@ -171,15 +155,15 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  'ຍອດຝາກບໍ່ພໍ (need ${_money(kPaymentAmount)} ₭, have ${_money(_balance)} ₭)',
+                  s.insufficientBalance(_money(kPaymentAmount), _money(_balance)),
                   style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ),
             const SizedBox(height: 20),
 
             // ── Payment method ──────────────────────────────────────────────
-            const Text('ວິທີຈ່າຍ (Payment Method)',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            Text(s.confirmPayMethod,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             _PaymentSelector(
               selected: _paymentMethod,
@@ -206,39 +190,35 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Row(
+                                Row(
                                   children: [
-                                    Icon(Icons.account_balance, color: Colors.blue, size: 18),
-                                    SizedBox(width: 6),
-                                    Text('ຂໍ້ມູນຜູ້ຮັບໂອນ (Transfer Recipient)',
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.blue)),
+                                    const Icon(Icons.account_balance, color: Colors.blue, size: 18),
+                                    const SizedBox(width: 6),
+                                    Text(s.recipientTitle,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
                                   ],
                                 ),
                                 const SizedBox(height: 12),
-                                // ── ຊື່ຜູ້ຮັບ
                                 TextField(
                                   controller: _reqNameCtrl,
                                   textCapitalization: TextCapitalization.words,
-                                  decoration: const InputDecoration(
-                                    labelText: 'ຊື່ຜູ້ຮັບ (request_name) *',
-                                    hintText: 'ທ. ສົມສີ ສີໄຊ',
-                                    prefixIcon: Icon(Icons.person_outline),
-                                    border: OutlineInputBorder(),
+                                  decoration: InputDecoration(
+                                    labelText: s.fieldReqName,
+                                    hintText: s.hintReqName,
+                                    prefixIcon: const Icon(Icons.person_outline),
+                                    border: const OutlineInputBorder(),
                                     isDense: true,
                                   ),
                                 ),
                                 const SizedBox(height: 10),
-                                // ── ເລກບັນຊີຜູ້ຮັບ
                                 TextField(
                                   controller: _reqAccCtrl,
                                   keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'ເລກບັນຊີຜູ້ຮັບ (request_acc_number) *',
+                                  decoration: InputDecoration(
+                                    labelText: s.fieldReqAcc,
                                     hintText: '010100100000001',
-                                    prefixIcon: Icon(Icons.credit_card),
-                                    border: OutlineInputBorder(),
+                                    prefixIcon: const Icon(Icons.credit_card),
+                                    border: const OutlineInputBorder(),
                                     isDense: true,
                                   ),
                                 ),
@@ -260,8 +240,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
                       width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.payments),
-              label: const Text('ຢືນຢັນຈ່າຍ (Confirm Payment)',
-                  style: TextStyle(fontSize: 16)),
+              label: Text(s.btnConfirmPay, style: const TextStyle(fontSize: 16)),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 backgroundColor: Colors.deepPurple,
@@ -273,7 +252,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
             OutlinedButton.icon(
               onPressed: _processing ? null : () => Navigator.of(context).pop(),
               icon: const Icon(Icons.cancel_outlined),
-              label: const Text('ຍົກເລີກ (Cancel)', style: TextStyle(fontSize: 16)),
+              label: Text(s.btnCancel, style: const TextStyle(fontSize: 16)),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),

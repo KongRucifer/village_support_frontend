@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
+import '../core/widgets/settings_button.dart';
 import '../models/account_owner.dart'; // AccountOwner + PagedResult
 import '../models/system_user.dart';
 import '../models/withdrawal.dart'; // Withdrawal + PaymentMethodType
@@ -123,10 +126,13 @@ class _WithdrawalsScreenState extends State<WithdrawalsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final result = _result;
+    final result   = _result;
+    final s        = context.watch<AppSettings>().s;
+    final subColor = Theme.of(context).colorScheme.onSurfaceVariant;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ປະຫວັດການຈ່າຍ (Payment History)'),
+        title: Text(s.payHistoryTitle),
+        actions: const [SettingsButton()],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(28),
           child: Container(
@@ -135,8 +141,8 @@ class _WithdrawalsScreenState extends State<WithdrawalsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Text(
               'Acc ${widget.owner.accNumber} • ${widget.owner.clientName}'
-              '${_fromCache ? '  • cached' : ''}',
-              style: const TextStyle(fontSize: 12, color: Colors.black87),
+              '${_fromCache ? '  • ${s.cachedData}' : ''}',
+              style: TextStyle(fontSize: 12, color: subColor),
             ),
           ),
         ),
@@ -147,7 +153,7 @@ class _WithdrawalsScreenState extends State<WithdrawalsScreen> {
             child: _loading && result == null
                 ? const Center(child: CircularProgressIndicator())
                 : result == null || result.items.isEmpty
-                    ? const Center(child: Text('ຍັງບໍ່ມີການຈ່າຍ (no payments yet)'))
+                    ? Center(child: Text(s.noPayments))
                     : RefreshIndicator(
                         onRefresh: _load,
                         child: ListView.separated(
@@ -177,7 +183,7 @@ class _WithdrawalsScreenState extends State<WithdrawalsScreen> {
                                       const SizedBox(width: 6),
                                       Flexible(
                                         child: Text(
-                                          w.txName ?? w.description ?? 'Savings withdrawal',
+                                          w.txName ?? w.description ?? s.savingsWithdrawal,
                                           style: const TextStyle(fontSize: 12),
                                           overflow: TextOverflow.ellipsis,
                                         ),
@@ -195,7 +201,7 @@ class _WithdrawalsScreenState extends State<WithdrawalsScreen> {
                                         color: Colors.orange.shade100,
                                         borderRadius: BorderRadius.circular(8),
                                       ),
-                                      child: const Text('ລໍຖ້າ sync',
+                                      child: Text(s.pendingSync,
                                           style: TextStyle(
                                               fontSize: 10, color: Colors.deepOrange)),
                                     )

@@ -41,6 +41,8 @@ dependencies:
   qr_flutter: ^4.1.0
   flutter_secure_storage: ^9.2.2   # JWT + sensitive data in OS Keychain/Keystore
   crypto: ^3.0.5                   # SHA-256 for offline password hashing
+  provider: ^6.1.5+1
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

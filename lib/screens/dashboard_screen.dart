@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
+import '../core/widgets/settings_button.dart';
 import '../models/system_user.dart';
 import '../models/vb_code.dart';
 import '../models/account_owner.dart';
@@ -92,11 +95,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _manualSync() async {
+    final s = context.read<AppSettings>().s;
     if (widget.user.token.isEmpty) {
-      _showSnack('No server token (offline session) — connect and re-login to sync.');
+      _showSnack(s.noTokenSync);
       return;
     }
-    _showSnack('Syncing…');
+    _showSnack(s.syncing);
     final r = await _services.sync.sync(widget.user.token, full: true);
     _showSnack(r.message ?? 'Done');
     if (r.ran) _load();
@@ -119,17 +123,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final result = _result;
+    final s = context.watch<AppSettings>().s;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Village Banks'),
+        title: Text(s.dashTitle),
         actions: [
+          const SettingsButton(),
           IconButton(
-            tooltip: 'Sync now',
+            tooltip: s.tooltipSync,
             icon: const Icon(Icons.sync),
             onPressed: _manualSync,
           ),
           IconButton(
-            tooltip: 'Logout',
+            tooltip: s.tooltipLogout,
             icon: const Icon(Icons.logout),
             onPressed: _logout,
           ),
@@ -154,7 +160,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     controller: _searchCtrl,
                     onChanged: _onSearchChanged,
                     decoration: InputDecoration(
-                      hintText: 'Search by VbCode or name…',
+                      hintText: s.searchVbCode,
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchCtrl.text.isEmpty
                           ? null
@@ -172,7 +178,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(width: 6),
                 Tooltip(
-                  message: 'ສະແກນ QR / ຈ່າຍເງິນ',
+                  message: s.tooltipScan,
                   child: InkWell(
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(
@@ -187,11 +193,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.teal.shade200),
                       ),
-                      child: const Icon(
-                        Icons.qr_code_scanner,
-                        color: Colors.teal,
-                        size: 26,
-                      ),
+                      child: const Icon(Icons.qr_code_scanner, color: Colors.teal, size: 26),
                     ),
                   ),
                 ),
@@ -202,7 +204,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: _loading && result == null
                 ? const Center(child: CircularProgressIndicator())
                 : result == null || result.items.isEmpty
-                    ? const Center(child: Text('No village banks found'))
+                    ? Center(child: Text(s.noVbCodes))
                     : RefreshIndicator(
                         onRefresh: _load,
                         child: ListView.separated(
@@ -342,7 +344,9 @@ class _StatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s     = context.watch<AppSettings>().s;
     final color = online ? Colors.green : Colors.orange;
+    final textStyle = TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant);
     return Container(
       width: double.infinity,
       color: color.withValues(alpha: 0.15),
@@ -352,16 +356,15 @@ class _StatusBar extends StatelessWidget {
           Icon(online ? Icons.cloud_done : Icons.cloud_off, size: 16, color: color),
           const SizedBox(width: 6),
           Text(
-            online ? 'Online' : 'Offline',
+            online ? s.online : s.offline,
             style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
           ),
           if (fromCache) ...[
             const SizedBox(width: 8),
-            const Text('• showing cached data',
-                style: TextStyle(fontSize: 12, color: Colors.black54)),
+            Text('• ${s.fromCache}', style: textStyle),
           ],
           const Spacer(),
-          Text('@$userName', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          Text('@$userName', style: textStyle),
         ],
       ),
     );

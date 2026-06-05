@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
+import '../core/widgets/settings_button.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../models/vb_code.dart';
@@ -39,7 +42,8 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
       if (!mounted || !online || widget.user.token.isEmpty) return;
       final pushed = await _services.sync.flushOutbox(widget.user.token);
       if (pushed > 0 && mounted) {
-        _showSnack('Synced $pushed offline edit(s)');
+        final s = context.read<AppSettings>().s;
+        _showSnack(s.syncedN(pushed));
         _loadOwners();
       }
     });
@@ -122,8 +126,12 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final owners = _owners;
+    final s = context.watch<AppSettings>().s;
     return Scaffold(
-      appBar: AppBar(title: Text('VbCode ${widget.vbCode}')),
+      appBar: AppBar(
+        title: Text('VbCode ${widget.vbCode}'),
+        actions: const [SettingsButton()],
+      ),
       body: Column(
         children: [
           _buildDetailCard(),
@@ -137,8 +145,8 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
               keyboardType: TextInputType.number,
               onChanged: _onBankbookChanged,
               decoration: InputDecoration(
-                labelText: 'Bankbook Number',
-                hintText: 'e.g. 00001',
+                labelText: s.fieldBankbook,
+                hintText: s.hintBankbook,
                 prefixIcon: const Icon(Icons.menu_book),
                 suffixIcon: _bankbookCtrl.text.isEmpty
                     ? null
@@ -160,9 +168,7 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               child: Text(
-                _bankbook.isEmpty
-                    ? 'All account owners in this village'
-                    : 'Owners for bankbook $_bankbook',
+                _bankbook.isEmpty ? s.allOwners : s.ownersFor(_bankbook),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -173,7 +179,7 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
             child: _loadingOwners && owners == null
                 ? const Center(child: CircularProgressIndicator())
                 : owners == null || owners.items.isEmpty
-                    ? const Center(child: Text('No account owners found'))
+                    ? Center(child: Text(s.noOwners))
                     : RefreshIndicator(
                         onRefresh: _loadOwners,
                         child: ListView.separated(
@@ -223,9 +229,9 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
     }
     final d = _detail;
     if (d == null) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Text('Village detail not available offline.'),
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(context.read<AppSettings>().s.villageNotOffline),
       );
     }
     return Container(

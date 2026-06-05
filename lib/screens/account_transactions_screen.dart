@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../core/providers/app_settings.dart';
+import '../core/widgets/settings_button.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../models/transaction_item.dart';
@@ -68,11 +71,14 @@ class _AccountTransactionsScreenState extends State<AccountTransactionsScreen> {
   @override
   Widget build(BuildContext context) {
     final result = _result;
-    final o = widget.owner;
+    final o        = widget.owner;
+    final s        = context.watch<AppSettings>().s;
+    final subColor = Theme.of(context).colorScheme.onSurfaceVariant;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ລາຍການ (Transactions)'),
+        title: Text(s.txTitle),
+        actions: const [SettingsButton()],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(44),
           child: Container(
@@ -89,8 +95,8 @@ class _AccountTransactionsScreenState extends State<AccountTransactionsScreen> {
                 Text(
                   'Acc: ${o.accNumber}'
                   '${o.accNameLao != null ? "  •  ${o.accNameLao}" : ""}'
-                  '${_fromCache ? "  • (cached)" : ""}',
-                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  '${_fromCache ? "  • ${s.cachedData}" : ""}',
+                  style: TextStyle(fontSize: 11, color: subColor),
                 ),
               ],
             ),
@@ -107,15 +113,13 @@ class _AccountTransactionsScreenState extends State<AccountTransactionsScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.receipt_long,
-                                size: 56, color: Colors.black12),
+                            Icon(Icons.receipt_long, size: 56,
+                                color: Theme.of(context).colorScheme.outlineVariant),
                             const SizedBox(height: 12),
                             Text(
-                              _fromCache
-                                  ? 'ບໍ່ມີຂໍ້ມູນ cache\nConnect to the internet to load'
-                                  : 'No transactions found',
+                              _fromCache ? s.txOfflineEmpty : s.noTx,
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.black45),
+                              style: TextStyle(color: subColor),
                             ),
                           ],
                         ),
