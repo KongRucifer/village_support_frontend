@@ -126,6 +126,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         return;
       }
 
+      // Proactive token refresh ກ່ອນ API call (token ອາດໝົດ ໃນ 30min window).
+      await _services.auth.refreshIfExpired(widget.user);
+
       // Resolve the full owner (bankbookNumber + vbCode + balance) via backend,
       // falling back to the local SQLite cache when offline.
       AccountOwner? owner;

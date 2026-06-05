@@ -2,7 +2,10 @@ class SystemUser {
   final int id;
   final String userName;
   final List<String> roles;
-  final String token; // JWT access token (empty when restored offline-only)
+
+  /// JWT access token. Non-final: AuthRepository ສາມາດ update ໄດ້
+  /// ຫຼັງ silent refresh ໂດຍ user ບໍ່ຮູ້ຕົວ.
+  String token;
 
   SystemUser({
     required this.id,
@@ -11,7 +14,6 @@ class SystemUser {
     required this.token,
   });
 
-  /// Builds from the `/auth/login-test` response body.
   factory SystemUser.fromLoginResponse(Map<String, dynamic> json) {
     final user = (json['user'] ?? {}) as Map<String, dynamic>;
     return SystemUser(
@@ -30,7 +32,7 @@ class SystemUser {
           .split(',')
           .where((e) => e.trim().isNotEmpty)
           .toList(),
-      token: token.isNotEmpty ? token : (row['token'] ?? '') as String,
+      token: token,
     );
   }
 }

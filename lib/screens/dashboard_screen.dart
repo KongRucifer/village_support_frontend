@@ -39,8 +39,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _connSub = _services.connectivity.onStatusChange.listen((online) async {
       if (!mounted) return;
       setState(() => _online = online);
-      // When connectivity returns, auto-sync then refresh the list.
       if (online && widget.user.token.isNotEmpty) {
+        // Refresh token first (ຖ້າຈະໝົດ/ໝົດ) ຈາກນັ້ນ sync.
+        await _services.auth.refreshIfExpired(widget.user);
         final r = await _services.sync.sync(widget.user.token);
         if (mounted && r.ran) {
           _showSnack(r.message ?? 'Synced');
@@ -48,7 +49,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
     });
-    _load();
+    // Proactive refresh on startup (token ອາດໝົດ ຖ້າ app ຢູ່ background ດົນ).
+    _services.auth.refreshIfExpired(widget.user).then((_) => _load());
   }
 
   @override

@@ -17,6 +17,7 @@ class SecureStorageService {
 
   // ── Key naming ───────────────────────────────────────────────────────────────
   static String _tokenKey(String userName) => 'jwt_token_$userName';
+  static String _pwKey(String userName)    => 'pw_for_refresh_$userName';
   static const String _lastUserKey = 'last_logged_in_user';
 
   // ── Token operations ─────────────────────────────────────────────────────────
@@ -40,6 +41,24 @@ class SecureStorageService {
   /// ລຶບ token ຂອງ user ນີ້ (logout).
   Future<void> clearToken(String userName) async {
     await _store.delete(key: _tokenKey(userName));
+  }
+
+  // ── Password for silent token refresh ────────────────────────────────────────
+  // ເຫດຜົນ: Token ມີອາຍຸ 30 ນາທີ. ເພື່ອ refresh ໂດຍ user ບໍ່ຮູ້ຕົວ, ຕ້ອງ
+  // re-authenticate ກັບ server. Password ຈຶ່ງຖືກເກັບໃນ Keychain/Keystore
+  // (ບໍ່ແມ່ນ SQLite), ຊຶ່ງ OS ຄຸ້ມຄອງ encryption ໃຫ້ດ້ວຍ hardware-backed key.
+  // Password ຈະຖືກລຶບທັນທີຫຼັງ logout / uninstall.
+
+  Future<void> savePassword(String userName, String password) async {
+    await _store.write(key: _pwKey(userName), value: password);
+  }
+
+  Future<String?> getPassword(String userName) async {
+    return _store.read(key: _pwKey(userName));
+  }
+
+  Future<void> clearPassword(String userName) async {
+    await _store.delete(key: _pwKey(userName));
   }
 
   /// ລຶບທຸກຂໍ້ມູນໃນ secure storage (full logout / uninstall cleanup).
