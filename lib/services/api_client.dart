@@ -11,7 +11,11 @@ import '../models/withdrawal.dart'; // PaymentMethodType
 class ApiException implements Exception {
   final String message;
   final int? statusCode;
-  ApiException(this.message, [this.statusCode]);
+  /// Machine-readable error code from the backend (e.g. 'ALREADY_CHECKED_IN').
+  /// Used by the UI to show a localized message. Null when the backend
+  /// did not send a code.
+  final String? code;
+  ApiException(this.message, [this.statusCode, this.code]);
   @override
   String toString() => message;
 }
@@ -186,7 +190,11 @@ class ApiClient {
 
     final body = _decode(res);
     if (res.statusCode != 200 && res.statusCode != 201) {
-      throw ApiException(_errorMessage(body, 'Withdraw failed'), res.statusCode);
+      throw ApiException(
+        _errorMessage(body, 'Withdraw failed'),
+        res.statusCode,
+        _errorCode(body),
+      );
     }
     return WithdrawResult(
       newBalance: (body['currentBalance'] ?? 0) as int,
@@ -194,6 +202,33 @@ class ApiClient {
       paymentMethod: PaymentMethodType.fromApi(body['paymentMethod'] as String?),
       date: (body['date'] ?? '').toString(),
     );
+  }
+
+  // ── Check in (sets status_scan = 1 on the account) ──────────────────────────
+  /// Throws [ApiException] with statusCode 409 if already checked in.
+  Future<void> checkIn({
+    required String token,
+    required String accNumber,
+    String? vbCode,
+  }) async {
+    final res = await _http
+        .post(
+          _uri('/village-data/accounts/${accNumber.trim()}/checkin'),
+          headers: _headers(token),
+          body: jsonEncode({
+            if (vbCode?.isNotEmpty == true) 'vbCode': vbCode,
+          }),
+        )
+        .timeout(AppConfig.apiTimeout);
+
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      final body = _decode(res);
+      throw ApiException(
+        _errorMessage(body, 'Check-in failed'),
+        res.statusCode,
+        _errorCode(body),
+      );
+    }
   }
 
   // ── List withdrawal transactions (tx 3101) for an account ───────────────────
@@ -342,6 +377,13 @@ class ApiClient {
     if (msg is List && msg.isNotEmpty) return msg.first.toString();
     if (msg is Map && msg['message'] is String) return msg['message'] as String;
     return fallback;
+  }
+
+  /// Extracts the machine-readable error code from a NestJS error body.
+  /// Returns null when the backend didn't send one.
+  String? _errorCode(Map<String, dynamic> body) {
+    final code = body['code'];
+    return code is String ? code : null;
   }
 }
 

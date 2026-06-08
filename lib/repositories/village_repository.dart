@@ -110,6 +110,20 @@ class VillageRepository {
 
   Future<int> pendingCount() => db.pendingOutboxCount();
 
+  /// Check in a member (online-only — real-time presence action).
+  /// Inserts a row in vbc_arrangement on the server (points=1, need_sync='i').
+  /// Throws [ApiException] with statusCode 409 if already checked in today.
+  Future<void> checkInAccount({
+    required String token,
+    required AccountOwner owner,
+  }) async {
+    await api.checkIn(
+      token: token,
+      accNumber: owner.accNumber,
+      vbCode: owner.vbCode,
+    );
+  }
+
   /// Withdraw (cut) money from savings. Online → creates a 3101 transaction on
   /// the server; offline → queues the withdraw and records it locally as pending.
   Future<WithdrawOutcome> withdrawSavings({
@@ -269,12 +283,40 @@ class VillageRepository {
         // fall through to cache
       }
     }
-    // Offline fallback: load the JSON blob and reconstruct TransactionItems.
+    // Offline fallback: merge the cached server transactions with any locally
+    // queued (pending) withdrawals so the user can see them immediately.
     final cached = await db.loadTxCache(accNumber);
-    final items = cached.map(TransactionItem.fromJson).toList();
+    final serverItems = cached.map(TransactionItem.fromJson).toList();
+
+    // Load ALL rows from the local withdrawals table for this account — both
+    // pending (offline-created) and previously synced rows cached on page 1.
+    final localWithdrawals = await db.queryWithdrawals(
+      accNumber: accNumber,
+      page: 1,
+      limit: 1000, // large enough to capture all local rows
+    );
+
+    // Convert local withdrawal rows to TransactionItems.
+    // Only include rows whose id is NOT already in the server cache, to avoid
+    // duplicates when the server has already returned the same transaction.
+    final serverIds = serverItems.map((t) => t.id).toSet();
+    final pendingItems = localWithdrawals.items
+        .where((w) => !serverIds.contains(w.txId))
+        .map((w) => w.toTransactionItem())
+        .toList();
+
+    // Merge: pending items first (newest action), then server cache.
+    // Sort by date descending so the list order is always newest-first.
+    final all = [...pendingItems, ...serverItems];
+    all.sort((a, b) {
+      final da = a.date ?? '';
+      final db2 = b.date ?? '';
+      return db2.compareTo(da); // descending
+    });
+
     return PagedResult<TransactionItem>(
-      items: items,
-      total: items.length,
+      items: all,
+      total: all.length,
       page: 1,
       limit: limit,
       fromCache: true,

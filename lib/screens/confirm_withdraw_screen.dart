@@ -11,7 +11,7 @@ import '../services/api_client.dart';
 import '../widgets/top_toast.dart';
 
 /// Fixed payment amount (per business rule — cannot be changed by the user).
-const int kPaymentAmount = 250000;
+const int kPaymentAmount = 195000;
 
 /// Confirmation page shown after a successful QR scan or document lookup.
 /// Payment amount is fixed at [kPaymentAmount] ₭. User chooses payment method
@@ -88,7 +88,11 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
-      TopToast.error(context, s.payFailed(e.message));
+      // Map the backend error code to a localized message; fall back to payFailed.
+      final msg = e.code != null
+          ? s.scanError(e.code, e.message)
+          : s.payFailed(e.message);
+      TopToast.error(context, msg);
     } catch (e) {
       if (!mounted) return;
       TopToast.error(context, '${s.error}: $e');
@@ -183,19 +187,23 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.blue.shade200),
+                              border: Border.all(
+                                  color: Theme.of(context).colorScheme.outlineVariant),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Row(
                                   children: [
-                                    const Icon(Icons.account_balance, color: Colors.blue, size: 18),
+                                    Icon(Icons.account_balance,
+                                        color: Theme.of(context).colorScheme.primary, size: 18),
                                     const SizedBox(width: 6),
                                     Text(s.recipientTitle,
-                                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: Theme.of(context).colorScheme.primary)),
                                   ],
                                 ),
                                 const SizedBox(height: 12),
@@ -240,10 +248,12 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
                       width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.payments),
-              label: Text(s.btnConfirmPay, style: const TextStyle(fontSize: 16)),
+              label: Text(s.btnConfirmPay,
+                  style: const TextStyle(fontSize: 16, color: Colors.white)),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 backgroundColor: Colors.deepPurple,
+                foregroundColor: Colors.white,
               ),
             ),
             const SizedBox(height: 12),
@@ -279,19 +289,20 @@ class _DetailCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.deepPurple.shade50,
+        color: cs.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.deepPurple.shade100),
+        border: Border.all(color: cs.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.person, color: Colors.deepPurple),
+              Icon(Icons.person, color: cs.primary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -322,13 +333,14 @@ class _DetailCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('ເງິນຝາກ (Savings)', style: TextStyle(color: Colors.black54)),
+              Text('ເງິນຝາກ (Savings)',
+                  style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
               Text(
                 '${money(balance)} ₭',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Colors.deepPurple,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
               ),
             ],
@@ -351,7 +363,10 @@ class _Row extends StatelessWidget {
             SizedBox(
               width: 100,
               child: Text(label,
-                  style: const TextStyle(color: Colors.black54, fontSize: 13)),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 13,
+                  )),
             ),
             Expanded(
               child: Text(value,
@@ -405,39 +420,45 @@ class _Tile extends StatelessWidget {
     required this.selected, required this.color, required this.onTap,
   });
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            color: selected ? color.withValues(alpha: 0.1) : Colors.grey.shade100,
-            border: Border.all(
-              color: selected ? color : Colors.grey.shade300,
-              width: selected ? 2 : 1,
-            ),
-            borderRadius: BorderRadius.circular(10),
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final unselectedBg = cs.surfaceContainerHighest;
+    final unselectedBorder = cs.outlineVariant;
+    final unselectedText = cs.onSurfaceVariant;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.15) : unselectedBg,
+          border: Border.all(
+            color: selected ? color : unselectedBorder,
+            width: selected ? 2 : 1,
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: selected ? color : Colors.grey, size: 22),
-              const SizedBox(width: 6),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label,
-                      style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.bold,
-                        color: selected ? color : Colors.black87)),
-                  Text(sublabel,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: selected ? color : Colors.grey)),
-                ],
-              ),
-            ],
-          ),
+          borderRadius: BorderRadius.circular(10),
         ),
-      );
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: selected ? color : unselectedText, size: 22),
+            const SizedBox(width: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold,
+                      color: selected ? color : unselectedText)),
+                Text(sublabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: selected ? color : unselectedText)),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

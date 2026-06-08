@@ -478,6 +478,7 @@ class LocalDb {
     );
   }
 
+
   // ── Transaction JSON-blob cache ──────────────────────────────────────────────
   // Stores the last fetched transactions per account as a JSON blob so the
   // list screen can show something meaningful while offline.

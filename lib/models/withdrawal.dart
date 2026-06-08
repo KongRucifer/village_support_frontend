@@ -1,3 +1,5 @@
+import 'transaction_item.dart';
+
 enum PaymentMethodType {
   cash,
   bankTransfer;
@@ -94,5 +96,24 @@ class Withdrawal {
         txName: r['tx_name'] as String?,
         paymentMethod: PaymentMethodType.fromApi(r['payment_method'] as String?),
         pending: ((r['pending'] ?? 0) as int) == 1,
+      );
+
+  /// Convert to a [TransactionItem] so pending offline withdrawals can appear
+  /// in the transactions list alongside cached server transactions.
+  TransactionItem toTransactionItem() => TransactionItem(
+        id: txId,
+        date: date,
+        bankbookNumber: bankbookNumber,
+        txCode: '3101',
+        txNameLao: txName ?? 'ຖອນເງິນຝາກ',
+        txNameEng: txName ?? 'Savings withdrawal',
+        amount: amount,
+        debitAccNumber: accNumber,
+        debitAccNameLao: null,
+        creditAccNumber: accNumber,
+        description: pending
+            ? '${description ?? 'Savings withdrawal'} [ລໍຖ້າ sync]'
+            : description,
+        paymentMethod: paymentMethod.apiValue,
       );
 }

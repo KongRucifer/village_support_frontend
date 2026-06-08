@@ -49,6 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() { _loading = true; _error = null; });
+    final s = context.read<AppSettings>().s;
 
     try {
       final result = await _services.auth.login(
@@ -68,9 +69,17 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = '$e');
+      String msg = e.message;
+      if (msg.contains('Username is incorrect')) {
+        msg = s.errLoginUsername;
+      } else if (msg.contains('Password is incorrect')) {
+        msg = s.errLoginPassword;
+      } else {
+        msg = s.errLoginOther(e.message);
+      }
+      setState(() => _error = msg);
+    } catch (_) {
+      setState(() => _error = s.errLoginNetwork);
     } finally {
       if (mounted) setState(() => _loading = false);
     }

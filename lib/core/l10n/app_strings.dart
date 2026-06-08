@@ -41,6 +41,10 @@ class AppStrings {
   String get btnLogin           => _s('Login', 'ເຂົ້າສູ່ລະບົບ');
   String get hintOnlineLogin    => _s('Online — credentials verified with the server.', 'ອອນລາຍ — ກວດສອບຂໍ້ມູນກັບ server.');
   String get hintOfflineLogin   => _s('Offline — login uses your last cached credentials.', 'ອອຟລາຍ — ໃຊ້ຂໍ້ມູນ cache ທີ່ຈັດໄວ້ລ່ວງໜ້າ.');
+  String get errLoginUsername   => _s('Username is incorrect', 'ຊື່ຜູ້ໃຊ້ບໍ່ຖືກຕ້ອງ');
+  String get errLoginPassword   => _s('Password is incorrect', 'ລະຫັດຜ່ານບໍ່ຖືກຕ້ອງ');
+  String get errLoginNetwork    => _s('Network error — check your connection', 'ຂໍ້ຜິດພາດເຄືອຂ່າຍ — ກວດສອບການເຊື່ອມຕໍ່');
+  String errLoginOther(String m) => _s('Login failed: $m', 'ເຂົ້າສູ່ລະບົບລົ້ມເຫຼວ: $m');
 
   // ── Dashboard ─────────────────────────────────────────────────────────────
   String get dashTitle          => _s('Village Banks', 'ທະນາຄານບ້ານ');
@@ -88,6 +92,46 @@ class AppStrings {
   String get errNoToken         => _s('No token — please login again', 'ບໍ່ມີ token — ກະລຸນາ login ໃໝ່');
   String errDocNotFound(String id, String vb) =>
       _s('Document "$id" not found in VbCode $vb', 'ບໍ່ພົບ document "$id" ໃນ VbCode $vb');
+
+  // ── Check-in / Check-out scan ──────────────────────────────────────────────
+  String get checkInTitle        => _s('Check In', 'ສະແກນເຂົ້າ');
+  String get scanModeCheckIn     => _s('Check In', 'ສະແກນເຂົ້າ');
+  String get scanModeCheckOut    => _s('Check Out', 'ສະແກນອອກ');
+  String get btnConfirmCheckIn   => _s('Confirm Check In', 'ຢືນຢັນເຂົ້າ');
+  String checkInSuccess(String name) =>
+      _s('Checked in ✓  $name', 'ສະແກນເຂົ້າສຳເລັດ ✓  $name');
+
+  /// Maps a backend error `code` to a localized message. Falls back to the
+  /// raw server message when the code is unknown/null.
+  String scanError(String? code, String serverMsg) {
+    switch (code) {
+      case 'LOSS_STATUS':
+        return _s('This account is closed (loss status) — action not allowed.',
+            'ບັນຊີນີ້ຖືກປິດ (ສະຖານະສູນເສຍ) — ບໍ່ສາມາດດຳເນີນການໄດ້');
+      case 'ALREADY_CHECKED_IN_OUT_TODAY':
+        return _s('Already checked in and out today. Please check in next day.',
+            'ສະແກນເຂົ້າ ແລະ ອອກແລ້ວໃນມື້ນີ້, ກະລຸນາສະແກນເຂົ້າໃໝ່ໃນມື້ຕໍ່ໄປ');
+      case 'ALREADY_CHECKED_IN':
+        return _s('Already checked in today. Must check out (pay) first.',
+            'ສະແກນເຂົ້າແລ້ວ, ຕ້ອງສະແກນອອກ (ຈ່າຍເງິນ) ກ່ອນ');
+      case 'ALREADY_CHECKED_OUT':
+        return _s('Already paid today. Must check in again first.',
+            'ຈ່າຍເງິນແລ້ວໃນມື້ນີ້, ຕ້ອງສະແກນເຂົ້າໃໝ່ກ່ອນ');
+      case 'MUST_CHECK_IN_FIRST':
+        return _s('Must check in before paying.',
+            'ຕ້ອງສະແກນເຂົ້າກ່ອນຈ່າຍເງິນ');
+      case 'INSUFFICIENT_BALANCE':
+        return _s('Insufficient savings balance.',
+            'ຍອດເງິນຝາກບໍ່ພໍ');
+      case 'VB_MISMATCH':
+        return _s('Account does not belong to this village.',
+            'ບັນຊີບໍ່ກົງກັບໝູ່ບ້ານນີ້');
+      case 'ACCOUNT_NOT_FOUND':
+        return _s('Account not found.', 'ບໍ່ພົບບັນຊີ');
+      default:
+        return serverMsg;
+    }
+  }
 
   // ── Confirm payment ───────────────────────────────────────────────────────
   String get confirmTitle        => _s('Confirm Payment', 'ຢືນຢັນການຈ່າຍ');

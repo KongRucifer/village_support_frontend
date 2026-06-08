@@ -8,6 +8,7 @@ import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../services/app_services.dart';
 import '../widgets/top_toast.dart';
+import 'confirm_checkin_screen.dart';
 import 'confirm_withdraw_screen.dart';
 
 // ── Input mode ────────────────────────────────────────────────────────────────
@@ -51,8 +52,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     autoStart: true,
   );
 
-  _InputMode _mode  = _InputMode.qr;
-  _ScanState _state = _ScanState.ready;
+  _InputMode _mode       = _InputMode.qr;
+  _ScanState _state      = _ScanState.ready;
+  bool       _checkInMode = true;  // true = ສະແກນເຂົ້າ (check-in) default, false = ສະແກນອອກ (pay)
   int _cooldownLeft = 0;
   Timer? _cooldownTimer;
   bool _docSearching = false;
@@ -99,7 +101,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ConfirmWithdrawScreen(user: widget.user, owner: owner),
+        builder: (_) => _checkInMode
+            ? ConfirmCheckInScreen(user: widget.user, owner: owner)
+            : ConfirmWithdrawScreen(user: widget.user, owner: owner),
       ),
     );
     if (mounted) Navigator.of(context).pop();
@@ -284,6 +288,8 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
           _BottomPanel(
             mode: _mode,
             onModeChange: _setMode,
+            checkInMode: _checkInMode,
+            onCheckInModeChange: (v) => setState(() => _checkInMode = v),
             docCtrl: _docCtrl,
             docSearching: _docSearching,
             onSearch: _searchByDocument,
@@ -299,6 +305,8 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 class _BottomPanel extends StatelessWidget {
   final _InputMode mode;
   final ValueChanged<_InputMode> onModeChange;
+  final bool checkInMode;
+  final ValueChanged<bool> onCheckInModeChange;
   final TextEditingController docCtrl;
   final bool docSearching;
   final VoidCallback onSearch;
@@ -306,6 +314,8 @@ class _BottomPanel extends StatelessWidget {
   const _BottomPanel({
     required this.mode,
     required this.onModeChange,
+    required this.checkInMode,
+    required this.onCheckInModeChange,
     required this.docCtrl,
     required this.docSearching,
     required this.onSearch,
@@ -319,7 +329,33 @@ class _BottomPanel extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Mode toggle ─────────────────────────────────────────────────
+          // ── Check-in / Check-out toggle ─────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: _ModeChip(
+                  icon: Icons.login,
+                  label: 'ສະແກນເຂົ້າ',
+                  selected: checkInMode,
+                  selectedColor: Colors.green,
+                  onTap: () => onCheckInModeChange(true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _ModeChip(
+                  icon: Icons.payments_outlined,
+                  label: 'ສະແກນອອກ',
+                  selected: !checkInMode,
+                  selectedColor: Colors.deepPurple,
+                  onTap: () => onCheckInModeChange(false),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // ── QR / Document input mode toggle ────────────────────────────
           Builder(builder: (ctx) {
             final sl = ctx.watch<AppSettings>().s;
             return Row(
@@ -426,23 +462,26 @@ class _ModeChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final Color? selectedColor;
 
   const _ModeChip({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.selectedColor,
   });
 
   @override
   Widget build(BuildContext context) {
+    final activeColor = selectedColor ?? Colors.teal;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? Colors.teal : Colors.white12,
+          color: selected ? activeColor : Colors.white12,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(
