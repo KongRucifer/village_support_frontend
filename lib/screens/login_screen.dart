@@ -5,6 +5,7 @@ import '../core/providers/app_settings.dart';
 import '../core/widgets/settings_button.dart';
 import '../services/api_client.dart';
 import '../services/app_services.dart';
+import '../services/background_sync_service.dart';
 import 'dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -16,7 +17,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey  = GlobalKey<FormState>();
-  final _userCtrl = TextEditingController(text: 'admin');
+  final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
@@ -29,9 +30,18 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _refreshStatus();
+    _loadLastUser();
     _services.connectivity.onStatusChange.listen((online) {
       if (mounted) setState(() => _online = online);
     });
+  }
+
+  /// Pre-fill the username field with whoever logged in last.
+  Future<void> _loadLastUser() async {
+    final last = await _services.secureStorage.getLastUser();
+    if (last != null && last.isNotEmpty && mounted) {
+      _userCtrl.text = last;
+    }
   }
 
   Future<void> _refreshStatus() async {
@@ -59,6 +69,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!result.offline) {
         _services.sync.sync(result.user.token);
       }
+      // Ensure OS-level background sync is active for this user (keeps the
+      // offline mirror fresh even after the app is killed).
+      await BackgroundSync.registerPeriodic();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(

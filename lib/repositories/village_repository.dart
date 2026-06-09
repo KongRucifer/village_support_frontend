@@ -13,6 +13,21 @@ class WithdrawOutcome {
   WithdrawOutcome({required this.synced, required this.newBalance});
 }
 
+/// Result of a check-in attempt.
+class CheckInOutcome {
+  final bool synced; // reached the server (vbc_arrangement row created)
+  CheckInOutcome({required this.synced});
+}
+
+/// Local today's date as 'YYYY-MM-DD' (device-local, matches backend's
+/// per-day check-in semantics).
+String _todayStr() {
+  final n = DateTime.now();
+  final mm = n.month.toString().padLeft(2, '0');
+  final dd = n.day.toString().padLeft(2, '0');
+  return '${n.year}-$mm-$dd';
+}
+
 /// Offline-first data access. Tries the API when online (and caches the
 /// results into SQLite); falls back to SQLite when offline or on error.
 class VillageRepository {
@@ -110,18 +125,111 @@ class VillageRepository {
 
   Future<int> pendingCount() => db.pendingOutboxCount();
 
-  /// Check in a member (online-only — real-time presence action).
-  /// Inserts a row in vbc_arrangement on the server (points=1, need_sync='i').
-  /// Throws [ApiException] with statusCode 409 if already checked in today.
-  Future<void> checkInAccount({
+  /// Find an account owner by ID-document number.
+  /// Online  → server (and caches the owner into SQLite).
+  /// Offline → resolves via the mirrored id_documents → account_owners tables,
+  ///           so document lookup keeps working with no internet.
+  /// Returns null when no matching account is found anywhere.
+  Future<AccountOwner?> findOwnerByDocument({
+    required String token,
+    required String idNumber,
+    String? vbCode,
+  }) async {
+    if (await connectivity.isOnline() && token.isNotEmpty) {
+      try {
+        final owner = await api.findByDocumentId(
+          token: token,
+          idNumber: idNumber,
+          vbCode: vbCode,
+        );
+        if (owner != null) await db.upsertAccountOwners([owner]);
+        return owner;
+      } catch (_) {
+        // Network/server failure — fall through to the offline mirror.
+      }
+    }
+    final clientId = await db.clientIdByDocument(idNumber, vbCode: vbCode);
+    if (clientId == null) return null;
+    return db.getAccountOwnerByClientId(clientId, vbCode: vbCode);
+  }
+
+  /// Check in a member. Online → inserts a vbc_arrangement row on the server.
+  /// Offline (or server unreachable) → enforces the same guards locally and
+  /// queues the check-in for sync. Throws [ApiException] (with an error `code`)
+  /// when a guard fails, so the UI can show a localized message.
+  Future<CheckInOutcome> checkInAccount({
     required String token,
     required AccountOwner owner,
   }) async {
-    await api.checkIn(
-      token: token,
+    final online = await connectivity.isOnline() && token.isNotEmpty;
+    final today = _todayStr();
+
+    if (online) {
+      try {
+        await api.checkIn(
+          token: token,
+          accNumber: owner.accNumber,
+          vbCode: owner.vbCode,
+        );
+        // Server accepted → mirror the state locally (checked in).
+        await db.upsertCheckinStatus(
+          bankbookNumber: owner.bankbookNumber,
+          vbCode: owner.vbCode,
+          date: today,
+          points: 1,
+          needSync: 'i',
+        );
+        return CheckInOutcome(synced: true);
+      } on ApiException {
+        // Real server rejection (e.g. already checked in) — show the error.
+        rethrow;
+      } catch (_) {
+        // Network-level failure (timeout, unreachable host) — go offline.
+      }
+    }
+
+    // ── Offline path: enforce the same guards the backend does ────────────────
+    _guardLossStatus(owner); // status_id == '4'
+
+    final st = await db.getCheckinStatus(owner.bankbookNumber, owner.vbCode, today);
+    if (st != null) {
+      final points = (st['points'] ?? -1) as int;
+      final needSync = st['need_sync'] as String?;
+      // Already checked in AND out today.
+      if (points == 0 && needSync == 'u') {
+        throw ApiException(
+            'Already checked in and out today', 409, 'ALREADY_CHECKED_IN_OUT_TODAY');
+      }
+      // Already checked in (not yet paid).
+      if (points == 1 && needSync == 'i') {
+        throw ApiException('Already checked in today', 409, 'ALREADY_CHECKED_IN');
+      }
+    }
+
+    // Record the check-in locally and queue it for sync.
+    await db.upsertCheckinStatus(
+      bankbookNumber: owner.bankbookNumber,
+      vbCode: owner.vbCode,
+      date: today,
+      points: 1,
+      needSync: 'i',
+    );
+    await db.enqueueCheckin(
       accNumber: owner.accNumber,
       vbCode: owner.vbCode,
+      bankbookNumber: owner.bankbookNumber,
+      clientId: owner.clientId,
+      createdAtIso: DateTime.now().toIso8601String(),
     );
+    return CheckInOutcome(synced: false);
+  }
+
+  /// Throws an [ApiException] with code 'LOSS_STATUS' if the account is on the
+  /// loss status (status_id == '4') — mirrors the backend guard.
+  void _guardLossStatus(AccountOwner owner) {
+    if (owner.statusId?.trim() == '4') {
+      throw ApiException('Account is inactive (loss status)', 400, 'LOSS_STATUS');
+    }
   }
 
   /// Withdraw (cut) money from savings. Online → creates a 3101 transaction on
@@ -138,6 +246,7 @@ class VillageRepository {
   }) async {
     final online = await connectivity.isOnline() && token.isNotEmpty;
     final nowIso = DateTime.now().toIso8601String();
+    final today = _todayStr();
 
     if (online) {
       try {
@@ -157,6 +266,15 @@ class VillageRepository {
           bankbookNumber: owner.bankbookNumber,
           newBalance: r.newBalance,
           pending: false,
+        );
+        // Server marked the member checked-out — mirror it locally.
+        await db.upsertCheckinStatus(
+          bankbookNumber: owner.bankbookNumber,
+          vbCode: owner.vbCode,
+          date: today,
+          points: 0,
+          needSync: 'u',
+          lastUpdate: nowIso,
         );
         // Cache the server transaction so it shows in the history even offline.
         await db.insertLocalWithdrawal(Withdrawal(
@@ -180,8 +298,36 @@ class VillageRepository {
       }
     }
 
+    // ── Offline (or push failed): enforce the same guards the backend does ─────
+    _guardLossStatus(owner); // status_id == '4'
+
+    final st = await db.getCheckinStatus(owner.bankbookNumber, owner.vbCode, today);
+    final points = st == null ? null : (st['points'] ?? -1) as int;
+    final needSync = st == null ? null : st['need_sync'] as String?;
+    // Already checked out today.
+    if (points == 0 && needSync == 'u') {
+      throw ApiException('Already checked out today', 400, 'ALREADY_CHECKED_OUT');
+    }
+    // Must check in before paying.
+    if (!(points == 1 && needSync == 'i')) {
+      throw ApiException('Must check in before paying', 400, 'MUST_CHECK_IN_FIRST');
+    }
+    // Insufficient balance.
+    if (currentBalance < amount) {
+      throw ApiException('Insufficient savings balance', 400, 'INSUFFICIENT_BALANCE');
+    }
+
     // Offline (or push failed): keep locally + queue.
     final newBalance = currentBalance - amount;
+    // Mark the member checked-out locally so the guards above stay consistent.
+    await db.upsertCheckinStatus(
+      bankbookNumber: owner.bankbookNumber,
+      vbCode: owner.vbCode,
+      date: today,
+      points: 0,
+      needSync: 'u',
+      lastUpdate: nowIso,
+    );
     await db.applyLocalSavingsEdit(
       accNumber: owner.accNumber,
       clientId: owner.clientId,
@@ -283,10 +429,14 @@ class VillageRepository {
         // fall through to cache
       }
     }
-    // Offline fallback: merge the cached server transactions with any locally
-    // queued (pending) withdrawals so the user can see them immediately.
-    final cached = await db.loadTxCache(accNumber);
-    final serverItems = cached.map(TransactionItem.fromJson).toList();
+    // Offline fallback: prefer the full mirrored history (tx_all) that the sync
+    // pulls for EVERY account; fall back to the per-account JSON cache only if
+    // the mirror is empty. Then merge any locally-queued (pending) withdrawals.
+    var serverItems = await db.queryTxAll(accNumber);
+    if (serverItems.isEmpty) {
+      final cached = await db.loadTxCache(accNumber);
+      serverItems = cached.map(TransactionItem.fromJson).toList();
+    }
 
     // Load ALL rows from the local withdrawals table for this account — both
     // pending (offline-created) and previously synced rows cached on page 1.

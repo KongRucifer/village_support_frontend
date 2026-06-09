@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 import 'dart:convert';
 import '../models/account_owner.dart';
+import '../models/transaction_item.dart';
 import '../models/vb_code.dart';
 import '../models/withdrawal.dart';
 
@@ -23,7 +24,7 @@ class LocalDb {
     final path = p.join(dir, 'village_support.db');
     return openDatabase(
       path,
-      version: 7,
+      version: 10,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
           await db.execute('ALTER TABLE account_owners ADD COLUMN pending INTEGER DEFAULT 0');
@@ -57,6 +58,22 @@ class LocalDb {
           ]) {
             try { await db.execute(sql); } catch (_) {}
           }
+        }
+        if (oldV < 8) {
+          // Offline check-in / check-out status (mirrors backend vbc_arrangement).
+          await db.execute(_createCheckinStatusSql);
+        }
+        if (oldV < 9) {
+          // Re-key checkin_status by (bankbook, vbcode, date) to match the
+          // server's vbc_arrangement so it can be synced. It's only a cache,
+          // so dropping and recreating is safe.
+          await db.execute('DROP TABLE IF EXISTS checkin_status');
+          await db.execute(_createCheckinStatusSql);
+        }
+        if (oldV < 10) {
+          // Full offline mirror: id_document lookups + all payment history.
+          await db.execute(_createIdDocumentsSql);
+          await db.execute(_createTxAllSql);
         }
       },
       onCreate: (db, version) async {
@@ -99,6 +116,9 @@ class LocalDb {
         await db.execute(_createWithdrawalsSql);
         await db.execute(_createTxCacheSql);
         await db.execute(_createCachedUsersSql);
+        await db.execute(_createCheckinStatusSql);
+        await db.execute(_createIdDocumentsSql);
+        await db.execute(_createTxAllSql);
         await db.execute('''
           CREATE TABLE sync_meta (
             key TEXT PRIMARY KEY,
@@ -373,6 +393,146 @@ class LocalDb {
     });
   }
 
+  // ── Check-in / check-out status (mirrors backend vbc_arrangement) ───────────
+  // Keyed by (bankbook_number, vb_code, date) — same as the server.
+  // points: 1 = checked in, 0 = checked out.
+  // need_sync: 'i' = checked in, 'u' = checked out (same meaning as backend).
+  static const String _createCheckinStatusSql = '''
+    CREATE TABLE IF NOT EXISTS checkin_status (
+      bankbook_number TEXT,
+      vb_code         TEXT,
+      date            TEXT,
+      points          INTEGER,
+      need_sync       TEXT,
+      last_update     TEXT,
+      PRIMARY KEY (bankbook_number, vb_code, date)
+    )
+  ''';
+
+  /// Returns the check-in row for a member (bankbook + vbCode) on a given date
+  /// ('YYYY-MM-DD'), or null if there is none.
+  Future<Map<String, dynamic>?> getCheckinStatus(
+    String bankbookNumber,
+    String vbCode,
+    String date,
+  ) async {
+    final db = await database;
+    final rows = await db.query(
+      'checkin_status',
+      where: 'bankbook_number = ? AND vb_code = ? AND date = ?',
+      whereArgs: [bankbookNumber.trim(), vbCode.trim(), date],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// Insert or update the local check-in status for a member on a date.
+  Future<void> upsertCheckinStatus({
+    required String bankbookNumber,
+    required String vbCode,
+    required String date,
+    required int points,
+    required String needSync,
+    String? lastUpdate,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'checkin_status',
+      {
+        'bankbook_number': bankbookNumber.trim(),
+        'vb_code': vbCode.trim(),
+        'date': date,
+        'points': points,
+        'need_sync': needSync,
+        'last_update': lastUpdate,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Merge server check-in rows into the local cache (upsert by primary key).
+  /// We upsert rather than delete-all so a locally-queued offline check-in that
+  /// hasn't been pushed yet is never wiped. Old rows are cleaned separately via
+  /// [deleteCheckinsBefore].
+  Future<void> bulkUpsertCheckins(List<Map<String, Object?>> rows) async {
+    if (rows.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final r in rows) {
+      batch.insert('checkin_status', r,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Delete check-in rows older than [date] ('YYYY-MM-DD') — keeps the table
+  /// small since only today's rows matter for the guards.
+  Future<void> deleteCheckinsBefore(String date) async {
+    final db = await database;
+    await db.delete('checkin_status', where: 'date < ?', whereArgs: [date]);
+  }
+
+  /// Reconcile today's check-in rows with the fresh server snapshot.
+  ///
+  /// Unlike a plain upsert, this also **deletes** today's local rows the server
+  /// no longer has — so an admin editing/deleting a `vbc_arrangement` row (e.g.
+  /// moving it to another day, or resetting it back to check-in) is reflected
+  /// locally on the next sync. Without this, a stale "checked out today" row
+  /// would survive and the guard would keep saying "already checked in and out".
+  ///
+  /// [pendingKeys] are 'bankbook|vbcode' of offline check-in/withdraw ops still
+  /// waiting in the outbox; their local state is preserved (never deleted or
+  /// overwritten) so an unsynced edit is never lost.
+  Future<void> replaceTodayCheckins({
+    required String today,
+    required List<Map<String, Object?>> serverRows,
+    required Set<String> pendingKeys,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      // 1. Drop today's non-pending local rows (server is the source of truth).
+      final existing = await txn.query('checkin_status',
+          where: 'date = ?', whereArgs: [today]);
+      for (final row in existing) {
+        final bb = (row['bankbook_number'] ?? '').toString().trim();
+        final vb = (row['vb_code'] ?? '').toString().trim();
+        if (pendingKeys.contains('$bb|$vb')) continue; // keep unsynced offline edit
+        await txn.delete(
+          'checkin_status',
+          where: 'bankbook_number = ? AND vb_code = ? AND date = ?',
+          whereArgs: [row['bankbook_number'], row['vb_code'], today],
+        );
+      }
+      // 2. Upsert the server's rows (pending keys keep their local state).
+      for (final r in serverRows) {
+        final bb = (r['bankbook_number'] ?? '').toString().trim();
+        final vb = (r['vb_code'] ?? '').toString().trim();
+        if (pendingKeys.contains('$bb|$vb')) continue; // local pending wins
+        await txn.insert('checkin_status', r,
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
+  /// Queue an offline check-in for later sync (outbox op = 'checkin').
+  Future<void> enqueueCheckin({
+    required String accNumber,
+    required String vbCode,
+    required String bankbookNumber,
+    required String clientId,
+    required String createdAtIso,
+  }) async {
+    final db = await database;
+    await db.insert('outbox', {
+      'op': 'checkin',
+      'acc_number': accNumber,
+      'vb_code': vbCode,
+      'bankbook_number': bankbookNumber,
+      'client_id': clientId,
+      'created_at': createdAtIso,
+    });
+  }
+
   Future<void> enqueueWithdraw({
     required String accNumber,
     required String vbCode,
@@ -478,6 +638,182 @@ class LocalDb {
     );
   }
 
+
+  // ── Delete-aware prune for account_owners ───────────────────────────────────
+  /// Remove locally-cached account_owner rows the server no longer has.
+  /// [keepKeys] is the full server key set ('bankbook|acc|client'). Rows still
+  /// marked pending (unsynced offline edits) are always kept so nothing is lost.
+  Future<void> pruneAccountOwners(Set<String> keepKeys) async {
+    if (keepKeys.isEmpty) return; // never wipe everything on an empty snapshot
+    final db = await database;
+    final rows = await db.query('account_owners',
+        columns: ['bankbook_number', 'acc_number', 'client_id', 'pending']);
+    final batch = db.batch();
+    for (final r in rows) {
+      if (((r['pending'] ?? 0) as int) == 1) continue; // keep unsynced edits
+      final key =
+          '${r['bankbook_number']}|${r['acc_number']}|${r['client_id']}';
+      if (!keepKeys.contains(key)) {
+        batch.delete('account_owners',
+            where: 'bankbook_number = ? AND acc_number = ? AND client_id = ?',
+            whereArgs: [r['bankbook_number'], r['acc_number'], r['client_id']]);
+      }
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Prune vb_codes down to the server's current set (vbCodes always come in full).
+  Future<void> pruneVbCodes(Set<String> keepCodes) async {
+    if (keepCodes.isEmpty) return;
+    final db = await database;
+    final rows = await db.query('vb_codes', columns: ['vb_code']);
+    final batch = db.batch();
+    for (final r in rows) {
+      final code = (r['vb_code'] ?? '').toString();
+      if (!keepCodes.contains(code)) {
+        batch.delete('vb_codes', where: 'vb_code = ?', whereArgs: [code]);
+      }
+    }
+    await batch.commit(noResult: true);
+  }
+
+  // ── id_document mirror (offline lookup by document number) ───────────────────
+  static const String _createIdDocumentsSql = '''
+    CREATE TABLE IF NOT EXISTS id_documents (
+      id                 TEXT PRIMARY KEY,
+      id_document_number TEXT,
+      client_id          TEXT,
+      vb_code            TEXT,
+      name_lao           TEXT,
+      name_eng           TEXT
+    )
+  ''';
+
+  Future<void> bulkUpsertIdDocuments(List<Map<String, Object?>> rows) async {
+    if (rows.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final r in rows) {
+      batch.insert('id_documents', r,
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Delete locally-cached id_document rows the server no longer has.
+  Future<void> pruneIdDocuments(Set<String> keepIds) async {
+    if (keepIds.isEmpty) return;
+    final db = await database;
+    final rows = await db.query('id_documents', columns: ['id']);
+    final batch = db.batch();
+    for (final r in rows) {
+      final id = (r['id'] ?? '').toString();
+      if (!keepIds.contains(id)) {
+        batch.delete('id_documents', where: 'id = ?', whereArgs: [id]);
+      }
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Resolve a document number (optionally scoped to a vbCode) to its clientId,
+  /// mirroring the backend's id_document lookup. Returns null if not found.
+  Future<String?> clientIdByDocument(String idNumber, {String? vbCode}) async {
+    final db = await database;
+    final clauses = <String>['id_document_number = ?'];
+    final args = <Object>[idNumber.trim()];
+    if (vbCode != null && vbCode.trim().isNotEmpty) {
+      clauses.add('vb_code = ?');
+      args.add(vbCode.trim());
+    }
+    final rows = await db.query(
+      'id_documents',
+      where: clauses.join(' AND '),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first['client_id'] as String?;
+  }
+
+  /// Find the account_owner for a client (optionally scoped to a vbCode).
+  Future<AccountOwner?> getAccountOwnerByClientId(String clientId,
+      {String? vbCode}) async {
+    final db = await database;
+    final clauses = <String>['client_id = ?'];
+    final args = <Object>[clientId];
+    if (vbCode != null && vbCode.trim().isNotEmpty) {
+      clauses.add('vb_code = ?');
+      args.add(vbCode.trim());
+    }
+    final rows = await db.query(
+      'account_owners',
+      where: clauses.join(' AND '),
+      whereArgs: args,
+      orderBy: 'acc_number ASC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AccountOwner.fromDb(rows.first);
+  }
+
+  // ── Full payment-history mirror (tx 3101 for ALL accounts) ──────────────────
+  // A transaction links to an account via debit_acc_number OR credit_acc_number,
+  // so history for account X queries both sides.
+  static const String _createTxAllSql = '''
+    CREATE TABLE IF NOT EXISTS tx_all (
+      id                 TEXT PRIMARY KEY,
+      date               TEXT,
+      bankbook_number    TEXT,
+      tx_code            TEXT,
+      tx_name_lao        TEXT,
+      tx_name_eng        TEXT,
+      amount             INTEGER,
+      debit_acc_number   TEXT,
+      debit_acc_name_lao TEXT,
+      credit_acc_number  TEXT,
+      description        TEXT,
+      payment_method     TEXT
+    )
+  ''';
+
+  Future<void> bulkUpsertTransactions(List<Map<String, Object?>> rows) async {
+    if (rows.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final r in rows) {
+      batch.insert('tx_all', r, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// Read mirrored payment history for one account (matches either acc side).
+  Future<List<TransactionItem>> queryTxAll(String accNumber,
+      {int limit = 1000}) async {
+    final db = await database;
+    final acc = accNumber.trim();
+    final rows = await db.query(
+      'tx_all',
+      where: 'debit_acc_number = ? OR credit_acc_number = ?',
+      whereArgs: [acc, acc],
+      orderBy: 'date DESC',
+      limit: limit,
+    );
+    return rows
+        .map((r) => TransactionItem(
+              id: (r['id'] ?? '') as String,
+              date: r['date'] as String?,
+              bankbookNumber: r['bankbook_number'] as String?,
+              txCode: (r['tx_code'] ?? '') as String,
+              txNameLao: r['tx_name_lao'] as String?,
+              txNameEng: r['tx_name_eng'] as String?,
+              amount: (r['amount'] ?? 0) as num,
+              debitAccNumber: (r['debit_acc_number'] ?? '') as String,
+              debitAccNameLao: r['debit_acc_name_lao'] as String?,
+              creditAccNumber: (r['credit_acc_number'] ?? '') as String,
+              description: r['description'] as String?,
+              paymentMethod: r['payment_method'] as String?,
+            ))
+        .toList();
+  }
 
   // ── Transaction JSON-blob cache ──────────────────────────────────────────────
   // Stores the last fetched transactions per account as a JSON blob so the

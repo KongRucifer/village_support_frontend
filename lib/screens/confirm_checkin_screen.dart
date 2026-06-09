@@ -45,12 +45,13 @@ class _ConfirmCheckInScreenState extends State<ConfirmCheckInScreen> {
     final s = context.read<AppSettings>().s;
     setState(() => _processing = true);
     try {
-      await _services.village.checkInAccount(
+      final outcome = await _services.village.checkInAccount(
         token: widget.user.token,
         owner: widget.owner,
       );
       if (!mounted) return;
-      TopToast.success(context, s.checkInSuccess(widget.owner.clientName));
+      final tail = outcome.synced ? '' : ' ${s.paySuccessOffline}';
+      TopToast.success(context, s.checkInSuccess(widget.owner.clientName) + tail);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {

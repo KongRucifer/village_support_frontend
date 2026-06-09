@@ -362,6 +362,21 @@ class ApiClient {
       accountOwners: ((body['accountOwners'] ?? []) as List)
           .map((e) => AccountOwner.fromJson(e as Map<String, dynamic>))
           .toList(),
+      checkins: ((body['checkins'] ?? []) as List)
+          .map((e) => CheckinSync.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      idDocuments: ((body['idDocuments'] ?? []) as List)
+          .map((e) => IdDocumentSync.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      transactions: ((body['transactions'] ?? []) as List)
+          .map((e) => TransactionItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      accountOwnerKeys: ((body['accountOwnerKeys'] ?? []) as List)
+          .map((e) => e.toString())
+          .toList(),
+      idDocumentIds: ((body['idDocumentIds'] ?? []) as List)
+          .map((e) => e.toString())
+          .toList(),
     );
   }
 
@@ -404,9 +419,78 @@ class SyncSnapshot {
   final String serverTime;
   final List<VbCode> vbCodes;
   final List<AccountOwner> accountOwners;
+  final List<CheckinSync> checkins;
+  final List<IdDocumentSync> idDocuments;
+  final List<TransactionItem> transactions;
+  /// Full key set of current account_owner rows ('bankbook|acc|client') so the
+  /// client can prune locally-cached rows the server deleted.
+  final List<String> accountOwnerKeys;
+  /// Full id set of current id_document rows for the same delete-aware pruning.
+  final List<String> idDocumentIds;
   SyncSnapshot({
     required this.serverTime,
     required this.vbCodes,
     required this.accountOwners,
+    this.checkins = const [],
+    this.idDocuments = const [],
+    this.transactions = const [],
+    this.accountOwnerKeys = const [],
+    this.idDocumentIds = const [],
   });
+}
+
+/// An id_document row pulled from the server (for offline lookup by document #).
+class IdDocumentSync {
+  final String id;
+  final String idDocumentNumber;
+  final String clientId;
+  final String? vbCode;
+  final String? documentNameLao;
+  final String? documentNameEng;
+
+  IdDocumentSync({
+    required this.id,
+    required this.idDocumentNumber,
+    required this.clientId,
+    this.vbCode,
+    this.documentNameLao,
+    this.documentNameEng,
+  });
+
+  factory IdDocumentSync.fromJson(Map<String, dynamic> j) => IdDocumentSync(
+        id: (j['id'] ?? '').toString(),
+        idDocumentNumber: (j['idDocumentNumber'] ?? '') as String,
+        clientId: (j['clientId'] ?? '') as String,
+        vbCode: j['vbCode'] as String?,
+        documentNameLao: j['documentNameLao'] as String?,
+        documentNameEng: j['documentNameEng'] as String?,
+      );
+}
+
+/// A check-in / check-out row pulled from the server's vbc_arrangement table.
+class CheckinSync {
+  final String? bankbookNumber;
+  final String vbCode;
+  final String date;       // 'YYYY-MM-DD'
+  final int? points;       // 1 = checked in, 0 = checked out
+  final String? needSync;  // 'i' = checked in, 'u' = checked out
+  final String? lastUpdate;
+
+  CheckinSync({
+    required this.bankbookNumber,
+    required this.vbCode,
+    required this.date,
+    required this.points,
+    required this.needSync,
+    required this.lastUpdate,
+  });
+
+  factory CheckinSync.fromJson(Map<String, dynamic> j) => CheckinSync(
+        bankbookNumber: j['bankbookNumber'] as String?,
+        vbCode: (j['vbCode'] ?? '') as String,
+        date: (j['date'] ?? '') as String,
+        points: j['points'] as int?,
+        needSync: j['needSync'] as String?,
+        lastUpdate: j['lastUpdate'] as String?,
+      );
 }

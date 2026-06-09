@@ -8,6 +8,7 @@ import '../models/system_user.dart';
 import '../models/vb_code.dart';
 import '../models/account_owner.dart';
 import '../services/app_services.dart';
+import '../services/background_sync_service.dart';
 import 'login_screen.dart';
 import 'scan_qr_screen.dart';
 import 'vbcode_detail_screen.dart';
@@ -21,11 +22,14 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   final _services = AppServices.instance;
   final _searchCtrl = TextEditingController();
 
   static const int _limit = 12;
+  // How often to refresh SQLite in the background while the app is alive.
+  static const Duration _autoSyncInterval = Duration(minutes: 3);
   int _page = 1;
   bool _loading = false;
   bool _online = true;
@@ -33,11 +37,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String _search = '';
   PagedResult<VbCode>? _result;
   Timer? _debounce;
+  Timer? _autoSyncTimer;
   StreamSubscription<bool>? _connSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _online = !widget.loggedInOffline;
     _connSub = _services.connectivity.onStatusChange.listen((online) async {
       if (!mounted) return;
@@ -45,6 +51,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (online && widget.user.token.isNotEmpty) {
         // Refresh token first (ຖ້າຈະໝົດ/ໝົດ) ຈາກນັ້ນ sync.
         await _services.auth.refreshIfExpired(widget.user);
+        // Incremental pull on reconnect: small + fast so it completes even if the
+        // connection is only briefly available. Today's check-ins are ALWAYS
+        // returned in full, so the delete-aware reconcile still fixes stale rows;
+        // the key lists still prune server-side deletions. (full sync only on a
+        // cold/empty mirror, handled inside SyncService.)
         final r = await _services.sync.sync(widget.user.token);
         if (mounted && r.ran) {
           _showSnack(r.message ?? 'Synced');
@@ -52,16 +63,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
     });
+    // Background heartbeat: keep SQLite fresh (vbcodes, accounts, check-ins)
+    // regardless of which page is on top — DashboardScreen stays mounted under
+    // pushed routes, so this timer runs the whole session.
+    _autoSyncTimer = Timer.periodic(_autoSyncInterval, (_) => _backgroundSync());
     // Proactive refresh on startup (token ອາດໝົດ ຖ້າ app ຢູ່ background ດົນ).
-    _services.auth.refreshIfExpired(widget.user).then((_) => _load());
+    _services.auth.refreshIfExpired(widget.user).then((_) {
+      _load();
+      // Incremental on open (fast); SyncService auto-forces a full pull when the
+      // local mirror is empty (first run), so cold start still loads everything.
+      _backgroundSync();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
+    _autoSyncTimer?.cancel();
     _connSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // When the app returns to the foreground, pull the latest data so the next
+    // scan is up to date without entering any page.
+    if (state == AppLifecycleState.resumed) {
+      // Incremental pull on resume (fast). Today's check-ins always come in full,
+      // so this still reconciles check-in/out state correctly.
+      _backgroundSync();
+    }
+  }
+
+  /// Best-effort silent sync used by the timer and lifecycle resume. Refreshes
+  /// the visible list if data changed; never shows a snackbar. [full] forces a
+  /// complete re-pull (used on open/resume/reconnect); the periodic timer uses
+  /// the lighter incremental pull.
+  Future<void> _backgroundSync({bool full = false}) async {
+    if (widget.user.token.isEmpty) return;
+    if (!await _services.connectivity.isOnline()) return;
+    await _services.auth.refreshIfExpired(widget.user);
+    final r = await _services.sync.sync(widget.user.token, full: full);
+    if (mounted && r.ran) _load();
   }
 
   Future<void> _load() async {
@@ -114,6 +159,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _logout() {
+    // Stop OS-level background sync; it re-registers on the next login.
+    BackgroundSync.cancel();
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (_) => false,

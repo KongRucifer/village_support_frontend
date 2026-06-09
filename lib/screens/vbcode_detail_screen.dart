@@ -234,9 +234,10 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
         child: Text(context.read<AppSettings>().s.villageNotOffline),
       );
     }
+    final cs = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
-      color: Colors.deepPurple.shade50,
+      color: cs.surfaceContainerHighest,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -246,10 +247,10 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 4),
-          _kv('VbCode', d.vbCode),
-          _kv('Village Bank', d.villageBankName ?? '-'),
-          _kv('District', d.districtName ?? d.districtId),
-          _kv('Province', d.provinceName ?? d.provinceId),
+          _kv(context, 'VbCode', d.vbCode),
+          _kv(context, 'Village Bank', d.villageBankName ?? '-'),
+          _kv(context, 'District', d.districtName ?? d.districtId),
+          _kv(context, 'Province', d.provinceName ?? d.provinceId),
           Wrap(
             spacing: 8,
             children: [
@@ -262,11 +263,13 @@ class _VbCodeDetailScreenState extends State<VbCodeDetailScreen> {
     );
   }
 
-  Widget _kv(String k, String v) => Padding(
+  Widget _kv(BuildContext context, String k, String v) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 1),
         child: Text.rich(TextSpan(children: [
           TextSpan(
-              text: '$k: ', style: const TextStyle(color: Colors.black54)),
+              text: '$k: ',
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
           TextSpan(
               text: v, style: const TextStyle(fontWeight: FontWeight.w500)),
         ])),
@@ -292,8 +295,9 @@ class _OwnerTile extends StatelessWidget {
     return ListTile(
       onTap: onTap,
       leading: CircleAvatar(
-        backgroundColor: Colors.teal.shade50,
-        child: const Icon(Icons.person, color: Colors.teal),
+        backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+        child: Icon(Icons.person,
+            color: Theme.of(context).colorScheme.onSecondaryContainer),
       ),
       title: Row(
         children: [

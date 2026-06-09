@@ -175,12 +175,13 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     // Capture strings BEFORE any async gap.
     final s = context.read<AppSettings>().s;
 
-    if (idNumber.isEmpty)           { _err(s.errQrInvalid);  return; }
-    if (widget.user.token.isEmpty)  { _err(s.errNoToken);    return; }
+    if (idNumber.isEmpty) { _err(s.errQrInvalid); return; }
 
     setState(() => _docSearching = true);
     try {
-      final owner = await _services.api.findByDocumentId(
+      // Offline-capable: online hits the server, offline resolves via the
+      // mirrored id_documents → account_owners tables in SQLite.
+      final owner = await _services.village.findOwnerByDocument(
         token: widget.user.token,
         idNumber: idNumber,
         vbCode: widget.vbCode,
@@ -189,7 +190,6 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         _err(s.errDocNotFound(idNumber, widget.vbCode));
         return;
       }
-      await _services.db.upsertAccountOwners([owner]);
       await _goConfirm(owner);
     } catch (e) {
       _err('${s.error}: ${e.toString().replaceFirst('ApiException: ', '')}');
