@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +8,7 @@ import '../core/providers/app_settings.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
 import '../services/app_services.dart';
+import '../services/qr_crypto.dart';
 import '../widgets/top_toast.dart';
 import 'confirm_checkin_screen.dart';
 import 'confirm_withdraw_screen.dart';
@@ -165,9 +167,23 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     }
   }
 
-  /// The QR contains only the plain account number, e.g. 010100100000001.
-  String? _extractAccNumber(String text) =>
-      text.isEmpty ? null : text;
+  /// The QR must carry the account number AES-encrypted (Base64) by the
+  /// backoffice `EncryptAES`. Returns null (invalid scan) if decryption fails.
+  String? _extractAccNumber(String text) {
+    if (text.isEmpty) return null;
+    final decrypted = QrCrypto.tryDecrypt(text);
+    if (decrypted != null && decrypted.trim().isNotEmpty) {
+      if (kDebugMode) debugPrint('[QR] decrypted → "${decrypted.trim()}"');
+      return decrypted.trim();
+    }
+        // Not an encrypted payload — treat as a legacy plain account-number QR.
+    // if (kDebugMode) debugPrint('[QR] raw (not encrypted) → "$text"');
+    // return text;
+
+    // Decryption failed — reject plain-text / unrecognised QR codes.
+    if (kDebugMode) debugPrint('[QR] rejected (not encrypted) → "$text"');
+    return null;
+  }
 
   // ── Document ID path ──────────────────────────────────────────────────────
   Future<void> _searchByDocument() async {

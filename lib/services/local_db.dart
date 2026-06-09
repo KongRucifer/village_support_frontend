@@ -426,6 +426,13 @@ class LocalDb {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// Debug helper: return ALL check-in rows for a date (used by the offline
+  /// guard logging to compare bankbook/vbcode against the scanned account).
+  Future<List<Map<String, dynamic>>> debugCheckinsForDate(String date) async {
+    final db = await database;
+    return db.query('checkin_status', where: 'date = ?', whereArgs: [date]);
+  }
+
   /// Insert or update the local check-in status for a member on a date.
   Future<void> upsertCheckinStatus({
     required String bankbookNumber,

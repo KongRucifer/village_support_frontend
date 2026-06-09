@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../models/account_owner.dart';
 import '../models/transaction_item.dart';
 import '../models/vb_code.dart';
@@ -192,6 +194,12 @@ class VillageRepository {
     _guardLossStatus(owner); // status_id == '4'
 
     final st = await db.getCheckinStatus(owner.bankbookNumber, owner.vbCode, today);
+    if (kDebugMode) {
+      final allToday = await db.debugCheckinsForDate(today);
+      debugPrint('[CHECKIN] offline guard acc=${owner.accNumber} '
+          'bankbook="${owner.bankbookNumber}" vb="${owner.vbCode}" today=$today '
+          'matchedStatus=$st | allTodayRows=$allToday');
+    }
     if (st != null) {
       final points = (st['points'] ?? -1) as int;
       final needSync = st['need_sync'] as String?;

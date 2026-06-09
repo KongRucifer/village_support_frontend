@@ -56,6 +56,16 @@ class AppStrings {
   String get syncing            => _s('Syncing…', 'ກຳລັງຊິງ…');
   String get noTokenSync        => _s('No server token — please re-login online to sync.', 'ບໍ່ມີ token — ກະລຸນາ login ໃໝ່ເພື່ອ sync.');
   String get fromCache          => _s('showing cached data', 'ສະແດງຂໍ້ມູນ cache');
+  // ── Sync status indicator ───────────────────────────────────────────────────
+  String get syncPulling        => _s('Pulling data…', 'ກຳລັງດຶງຂໍ້ມູນ…');
+  String get syncFailed         => _s('Sync failed', 'ດຶງຂໍ້ມູນລົ້ມເຫຼວ');
+  String get syncNever          => _s('Not synced yet', 'ຍັງບໍ່ໄດ້ດຶງຂໍ້ມູນ');
+  String get syncJustNow        => _s('synced just now', 'ຫາກໍດືງຂໍ້ມູນເເລ້ວ');
+  String syncSecondsAgo(int n)  => _s('synced ${n}s ago', 'ດຶງຂໍ້ມູນ $n ວິ ກ່ອນ');
+  String syncMinutesAgo(int n)  => _s('synced ${n}m ago', 'ດຶງຂໍ້ມູນ $n ນທ ກ່ອນ');
+  String syncHoursAgo(int n)    => _s('synced ${n}h ago', 'ດຶງຂໍ້ມູນ $n ຊມ ກ່ອນ');
+  String syncedCounts(int v, int a) =>
+      _s('$v villages • $a accounts', '$v ບ້ານ • $a ບັນຊີ');
 
   // ── VbCode detail ─────────────────────────────────────────────────────────
   String get fieldBankbook      => _s('Bankbook Number', 'ເລກສໍ຋');

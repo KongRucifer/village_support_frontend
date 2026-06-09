@@ -37,18 +37,26 @@ class TransactionItem {
   }
 
   factory TransactionItem.fromJson(Map<String, dynamic> j) {
-    final debit = (j['debitAccount'] ?? {}) as Map<String, dynamic>;
-    final txCode = (j['transactionCode'] ?? {}) as Map<String, dynamic>;
+    // Two payload shapes feed this:
+    //  • /withdrawals & /transactions → nested {transactionCode:{...}, debitAccount:{...}}
+    //  • /sync snapshot               → flat {txNameLao, txNameEng, debitAccNameLao}
+    // Use `as Map?` + `.cast` (NOT `?? {}` which yields a Map<dynamic,dynamic>
+    // and throws on the cast) so an absent nested object is handled safely.
+    final debit =
+        (j['debitAccount'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
+    final txCode =
+        (j['transactionCode'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
     return TransactionItem(
       id: (j['id'] ?? '') as String,
       date: j['date']?.toString(),
       bankbookNumber: j['bankbookNumber'] as String?,
       txCode: (j['transactionCodeId'] ?? '') as String,
-      txNameLao: (txCode['nameLao'] ?? txCode['name_lao']) as String?,
-      txNameEng: (txCode['nameEng'] ?? txCode['name_eng']) as String?,
+      txNameLao: (j['txNameLao'] ?? txCode['nameLao'] ?? txCode['name_lao']) as String?,
+      txNameEng: (j['txNameEng'] ?? txCode['nameEng'] ?? txCode['name_eng']) as String?,
       amount: (j['amount'] ?? 0) as num,
       debitAccNumber: (j['debitAccNumber'] ?? j['debit_acc_number'] ?? '') as String,
-      debitAccNameLao: (debit['accNameLao'] ?? debit['acc_name_lao']) as String?,
+      debitAccNameLao:
+          (j['debitAccNameLao'] ?? debit['accNameLao'] ?? debit['acc_name_lao']) as String?,
       creditAccNumber: (j['creditAccNumber'] ?? j['credit_acc_number'] ?? '') as String,
       description: j['description'] as String?,
       paymentMethod: j['paymentMethod'] as String?,

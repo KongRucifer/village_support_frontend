@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
@@ -344,12 +345,19 @@ class ApiClient {
 
   // ── Sync snapshot ─────────────────────────────────────────────────────────
   Future<SyncSnapshot> getSync({required String token, String? since}) async {
+    final sw = Stopwatch()..start();
     final res = await _http
         .get(
           _uri('/village-data/sync', {if (since != null) 'since': since}),
           headers: _headers(token),
         )
-        .timeout(const Duration(seconds: 30));
+        // Full pull can be large (all accounts + transactions). The server gzips
+        // the response (~10x smaller) and the dart http client auto-decompresses,
+        // but allow generous headroom so a big first sync isn't cut off.
+        .timeout(const Duration(seconds: 120));
+    final kb = (res.bodyBytes.length / 1024).toStringAsFixed(1);
+    debugPrint('[API] GET /sync since=${since ?? '-'} → '
+        'status=${res.statusCode} decoded=${kb}KB in ${sw.elapsedMilliseconds}ms');
     final body = _decode(res);
     if (res.statusCode != 200) {
       throw ApiException(_errorMessage(body, 'Sync failed'), res.statusCode);
@@ -376,6 +384,28 @@ class ApiClient {
           .toList(),
       idDocumentIds: ((body['idDocumentIds'] ?? []) as List)
           .map((e) => e.toString())
+          .toList(),
+    );
+  }
+
+  /// Lightweight check-in reconcile: only today's vbc_arrangement rows.
+  /// Tiny payload (uses the normal short timeout) so it finishes fast even when
+  /// the full [getSync] snapshot is too big to download on a brief connection.
+  Future<CheckinsResult> getCheckins({required String token}) async {
+    final res = await _http
+        .get(
+          _uri('/village-data/sync/checkins'),
+          headers: _headers(token),
+        )
+        .timeout(AppConfig.apiTimeout);
+    final body = _decode(res);
+    if (res.statusCode != 200) {
+      throw ApiException(_errorMessage(body, 'Check-in sync failed'), res.statusCode);
+    }
+    return CheckinsResult(
+      serverTime: (body['serverTime'] ?? '') as String,
+      checkins: ((body['checkins'] ?? []) as List)
+          .map((e) => CheckinSync.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
   }
@@ -413,6 +443,13 @@ class WithdrawResult {
     required this.date,
     this.paymentMethod = PaymentMethodType.cash,
   });
+}
+
+/// Result of the lightweight check-ins-only sync ([ApiClient.getCheckins]).
+class CheckinsResult {
+  final String serverTime;
+  final List<CheckinSync> checkins;
+  CheckinsResult({required this.serverTime, this.checkins = const []});
 }
 
 class SyncSnapshot {

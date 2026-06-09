@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/l10n/app_strings.dart';
 import '../core/providers/app_settings.dart';
 import '../core/widgets/settings_button.dart';
 import '../models/system_user.dart';
@@ -9,6 +10,7 @@ import '../models/vb_code.dart';
 import '../models/account_owner.dart';
 import '../services/app_services.dart';
 import '../services/background_sync_service.dart';
+import '../services/sync_service.dart';
 import 'login_screen.dart';
 import 'scan_qr_screen.dart';
 import 'vbcode_detail_screen.dart';
@@ -45,6 +47,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _online = !widget.loggedInOffline;
+    // Seed the "last synced" indicator from the persisted sync time so the
+    // status bar shows it immediately, before the first sync of this session.
+    _services.sync.primeStatus();
     _connSub = _services.connectivity.onStatusChange.listen((online) async {
       if (!mounted) return;
       setState(() => _online = online);
@@ -188,11 +193,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(36),
+          preferredSize: const Size.fromHeight(40),
           child: _StatusBar(
             online: _online,
             fromCache: _fromCache,
             userName: widget.user.userName,
+            sync: _services.sync,
           ),
         ),
       ),
@@ -316,14 +322,17 @@ class _VbCodeTile extends StatelessWidget {
       ),
       isThreeLine: true,
       trailing: Column(
+        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Chip(
             label: Text('${vb.accountOwnerCount} acc'),
             visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             padding: EdgeInsets.zero,
+            labelPadding: const EdgeInsets.symmetric(horizontal: 6),
           ),
-          const Icon(Icons.chevron_right),
+          const Icon(Icons.chevron_right, size: 18),
         ],
       ),
       onTap: onTap,
@@ -379,41 +388,124 @@ class _Pager extends StatelessWidget {
   }
 }
 
-class _StatusBar extends StatelessWidget {
+class _StatusBar extends StatefulWidget {
   final bool online;
   final bool fromCache;
   final String userName;
+  final SyncService sync;
   const _StatusBar({
     required this.online,
     required this.fromCache,
     required this.userName,
+    required this.sync,
   });
 
   @override
+  State<_StatusBar> createState() => _StatusBarState();
+}
+
+class _StatusBarState extends State<_StatusBar> {
+  // Ticks every few seconds so the "synced X ago" label stays current even when
+  // no sync is running (the relative time keeps growing).
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  /// Localized "synced X ago" from the last successful pull time.
+  String _agoLabel(AppStrings s, DateTime? last) {
+    if (last == null) return s.syncNever;
+    final secs = DateTime.now().difference(last).inSeconds;
+    if (secs < 5) return s.syncJustNow;
+    if (secs < 60) return s.syncSecondsAgo(secs);
+    final mins = secs ~/ 60;
+    if (mins < 60) return s.syncMinutesAgo(mins);
+    return s.syncHoursAgo(mins ~/ 60);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final s     = context.watch<AppSettings>().s;
-    final color = online ? Colors.green : Colors.orange;
-    final textStyle = TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant);
+    final s = context.watch<AppSettings>().s;
+    final color = widget.online ? Colors.green : Colors.orange;
+    final textStyle =
+        TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant);
     return Container(
       width: double.infinity,
       color: color.withValues(alpha: 0.15),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
         children: [
-          Icon(online ? Icons.cloud_done : Icons.cloud_off, size: 16, color: color),
+          Icon(widget.online ? Icons.cloud_done : Icons.cloud_off, size: 16, color: color),
           const SizedBox(width: 6),
           Text(
-            online ? s.online : s.offline,
+            widget.online ? s.online : s.offline,
             style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
           ),
-          if (fromCache) ...[
-            const SizedBox(width: 8),
-            Text('• ${s.fromCache}', style: textStyle),
-          ],
-          const Spacer(),
-          Text('@$userName', style: textStyle),
+          const SizedBox(width: 10),
+          // Real-time sync indicator (spinner while pulling, ✓ + time after).
+          Expanded(
+            child: ValueListenableBuilder<SyncStatus>(
+              valueListenable: widget.sync.status,
+              builder: (context, st, _) => _syncChip(s, st, textStyle),
+            ),
+          ),
+          Text('@${widget.userName}', style: textStyle),
         ],
       ),
     );
+  }
+
+  Widget _syncChip(AppStrings s, SyncStatus st, TextStyle textStyle) {
+    switch (st.phase) {
+      case SyncPhase.syncing:
+        return Row(
+          children: [
+            const SizedBox(
+              width: 12, height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 6),
+            Flexible(child: Text(s.syncPulling, style: textStyle, overflow: TextOverflow.ellipsis)),
+          ],
+        );
+      case SyncPhase.error:
+        return Row(
+          children: [
+            const Icon(Icons.sync_problem, size: 14, color: Colors.red),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                st.lastSuccess != null ? _agoLabel(s, st.lastSuccess) : s.syncFailed,
+                style: textStyle,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      case SyncPhase.success:
+      case SyncPhase.idle:
+        return Row(
+          children: [
+            Icon(Icons.check_circle,
+                size: 14,
+                color: st.lastSuccess == null ? Colors.grey : Colors.green),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(_agoLabel(s, st.lastSuccess), style: textStyle, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        );
+    }
   }
 }

@@ -9,13 +9,20 @@ class AppConfig {
   /// `flutter build apk` still produces a working production APK.
   ///
   /// URL per target:
-  /// • Production server -> http://183.182.104.202:8080/api/v1
+  /// • Production server -> http://183.182.104.202:8083/api/v1
   /// • Android emulator  -> http://10.0.2.2:4000/api/v1   (host's localhost)
   /// • iOS sim / desktop -> http://localhost:4000/api/v1
   /// • Physical (Wi-Fi)  -> `http://<your-PC-LAN-IP>:4000/api/v1`
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://183.182.104.202:8080/api/v1',
+    defaultValue: 'http://183.182.104.202:8083/api/v1',
+  );
+
+  /// AES-256-CBC secret key used to decrypt QR codes produced by the backoffice.
+  /// Supplied via .env `SECRET_KEY` — must match the C# `EncryptAES` secret.
+  static const String secretKey = String.fromEnvironment(
+    'SECRET_KEY',
+    defaultValue: 'LTS@superSecretKey',
   );
 
   /// Network timeout for API calls.
