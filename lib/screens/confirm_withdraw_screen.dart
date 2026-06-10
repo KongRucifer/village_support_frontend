@@ -77,7 +77,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
         amount: kPaymentAmount,
         currentBalance: _balance,
         paymentMethod: _paymentMethod,
-        note: _paymentMethod.shortLabel,
+        // No note → the backend fills the UNDP disbursement description itself.
         requestName: _paymentMethod == PaymentMethodType.bankTransfer ? _reqNameCtrl.text.trim() : null,
         requestAccNumber: _paymentMethod == PaymentMethodType.bankTransfer ? _reqAccCtrl.text.trim() : null,
       );

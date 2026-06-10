@@ -205,12 +205,14 @@ class ApiClient {
     );
   }
 
-  // ── Check in (sets status_scan = 1 on the account) ──────────────────────────
+  // ── Check in (records vbc_arrangement + deposits the fixed amount) ───────────
   /// Throws [ApiException] with statusCode 409 if already checked in.
-  Future<void> checkIn({
+  /// Returns the account's new savings balance after the deposit.
+  Future<int> checkIn({
     required String token,
     required String accNumber,
     String? vbCode,
+    required int amount,
   }) async {
     final res = await _http
         .post(
@@ -218,18 +220,20 @@ class ApiClient {
           headers: _headers(token),
           body: jsonEncode({
             if (vbCode?.isNotEmpty == true) 'vbCode': vbCode,
+            'amount': amount,
           }),
         )
         .timeout(AppConfig.apiTimeout);
 
+    final body = _decode(res);
     if (res.statusCode != 200 && res.statusCode != 201) {
-      final body = _decode(res);
       throw ApiException(
         _errorMessage(body, 'Check-in failed'),
         res.statusCode,
         _errorCode(body),
       );
     }
+    return (body['currentBalance'] ?? 0) as int;
   }
 
   // ── List withdrawal transactions (tx 3101) for an account ───────────────────
@@ -385,6 +389,8 @@ class ApiClient {
       idDocumentIds: ((body['idDocumentIds'] ?? []) as List)
           .map((e) => e.toString())
           .toList(),
+      withdrawDebitBase: (body['withdrawDebitBase'] ?? '') as String,
+      withdrawCreditBase: (body['withdrawCreditBase'] ?? '') as String,
     );
   }
 
@@ -464,6 +470,10 @@ class SyncSnapshot {
   final List<String> accountOwnerKeys;
   /// Full id set of current id_document rows for the same delete-aware pruning.
   final List<String> idDocumentIds;
+  /// Account base configured on the withdrawal tx code (6607). The client prefixes
+  /// the vbCode onto these to build debit/credit numbers for pending offline rows.
+  final String withdrawDebitBase;
+  final String withdrawCreditBase;
   SyncSnapshot({
     required this.serverTime,
     required this.vbCodes,
@@ -473,6 +483,8 @@ class SyncSnapshot {
     this.transactions = const [],
     this.accountOwnerKeys = const [],
     this.idDocumentIds = const [],
+    this.withdrawDebitBase = '',
+    this.withdrawCreditBase = '',
   });
 }
 

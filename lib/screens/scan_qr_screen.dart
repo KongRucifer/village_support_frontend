@@ -19,6 +19,125 @@ enum _InputMode { qr, document }
 // ── QR scan state ─────────────────────────────────────────────────────────────
 enum _ScanState { ready, checking, cooldown }
 
+// ── Scan mode (chosen before opening this screen) ────────────────────────────
+enum ScanMode { checkIn, checkOut }
+
+/// Show a bottom-sheet to let the user pick check-in or check-out mode.
+/// Returns null if dismissed without choosing. Follows the app theme (light/dark)
+/// and language (Lao/English).
+Future<ScanMode?> showScanModePicker(BuildContext context) {
+  return showModalBottomSheet<ScanMode>(
+    context: context,
+    // null → uses the theme's bottom-sheet surface (works in light & dark).
+    backgroundColor: Theme.of(context).colorScheme.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) {
+      final s  = ctx.read<AppSettings>().s;
+      final cs = Theme.of(ctx).colorScheme;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                s.scanModePickTitle,
+                style: Theme.of(ctx).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 20),
+              _ScanOptionButton(
+                icon: Icons.login,
+                label: s.scanModeCheckIn,
+                subtitle: s.scanModeCheckInSub,
+                color: Colors.green.shade600,
+                onTap: () => Navigator.of(ctx).pop(ScanMode.checkIn),
+              ),
+              const SizedBox(height: 12),
+              _ScanOptionButton(
+                icon: Icons.payments_outlined,
+                label: s.scanModeCheckOut,
+                subtitle: s.scanModeCheckOutSub,
+                color: Colors.deepPurple.shade400,
+                onTap: () => Navigator.of(ctx).pop(ScanMode.checkOut),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _ScanOptionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ScanOptionButton({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: Colors.white, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 16, color: color)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: TextStyle(
+                      fontSize: 12, color: cs.onSurfaceVariant)),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, size: 16, color: color),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Two-mode lookup screen:
 ///   • QR mode  – scan the member's QR code (vbCode + bankbook + accNumber)
 ///   • Doc mode – type the ID-document number to look up the account
@@ -27,6 +146,7 @@ enum _ScanState { ready, checking, cooldown }
 /// On success: auto-navigates to [ConfirmWithdrawScreen] then pops itself.
 class ScanQrScreen extends StatefulWidget {
   final SystemUser user;
+  final ScanMode mode;
   /// When set, the scanned account must belong to this village.
   /// Leave empty (default) when opening from the Dashboard — any village is allowed.
   final String vbCode;
@@ -35,6 +155,7 @@ class ScanQrScreen extends StatefulWidget {
   const ScanQrScreen({
     super.key,
     required this.user,
+    required this.mode,
     this.vbCode = '',        // empty = no village constraint
     this.bankbookNumber,
   });
@@ -56,7 +177,6 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
   _InputMode _mode       = _InputMode.qr;
   _ScanState _state      = _ScanState.ready;
-  bool       _checkInMode = true;  // true = ສະແກນເຂົ້າ (check-in) default, false = ສະແກນອອກ (pay)
   int _cooldownLeft = 0;
   Timer? _cooldownTimer;
   bool _docSearching = false;
@@ -103,7 +223,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => _checkInMode
+        builder: (_) => widget.mode == ScanMode.checkIn
             ? ConfirmCheckInScreen(user: widget.user, owner: owner)
             : ConfirmWithdrawScreen(user: widget.user, owner: owner),
       ),
@@ -302,10 +422,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 
           // ── Bottom panel ──────────────────────────────────────────────────
           _BottomPanel(
-            mode: _mode,
-            onModeChange: _setMode,
-            checkInMode: _checkInMode,
-            onCheckInModeChange: (v) => setState(() => _checkInMode = v),
+            scanMode: widget.mode,
+            inputMode: _mode,
+            onInputModeChange: _setMode,
             docCtrl: _docCtrl,
             docSearching: _docSearching,
             onSearch: _searchByDocument,
@@ -319,19 +438,17 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
 // ── Bottom panel widget ───────────────────────────────────────────────────────
 
 class _BottomPanel extends StatelessWidget {
-  final _InputMode mode;
-  final ValueChanged<_InputMode> onModeChange;
-  final bool checkInMode;
-  final ValueChanged<bool> onCheckInModeChange;
+  final ScanMode scanMode;
+  final _InputMode inputMode;
+  final ValueChanged<_InputMode> onInputModeChange;
   final TextEditingController docCtrl;
   final bool docSearching;
   final VoidCallback onSearch;
 
   const _BottomPanel({
-    required this.mode,
-    required this.onModeChange,
-    required this.checkInMode,
-    required this.onCheckInModeChange,
+    required this.scanMode,
+    required this.inputMode,
+    required this.onInputModeChange,
     required this.docCtrl,
     required this.docSearching,
     required this.onSearch,
@@ -345,127 +462,152 @@ class _BottomPanel extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Check-in / Check-out toggle ─────────────────────────────────
-          Row(
-            children: [
-              Expanded(
-                child: _ModeChip(
-                  icon: Icons.login,
-                  label: 'ສະແກນເຂົ້າ',
-                  selected: checkInMode,
-                  selectedColor: Colors.green,
-                  onTap: () => onCheckInModeChange(true),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _ModeChip(
-                  icon: Icons.payments_outlined,
-                  label: 'ສະແກນອອກ',
-                  selected: !checkInMode,
-                  selectedColor: Colors.deepPurple,
-                  onTap: () => onCheckInModeChange(false),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
+          // ── Mode label (green = check-in, purple = check-out) ───────────
+          _ModeLabelChip(mode: scanMode),
 
-          // ── QR / Document input mode toggle ────────────────────────────
-          Builder(builder: (ctx) {
-            final sl = ctx.watch<AppSettings>().s;
-            return Row(
-              children: [
-                Expanded(child: _ModeChip(
-                  icon: Icons.qr_code_scanner,
-                  label: sl.scanModeScan,
-                  selected: mode == _InputMode.qr,
-                  onTap: () => onModeChange(_InputMode.qr),
-                )),
-                const SizedBox(width: 10),
-                Expanded(child: _ModeChip(
-                  icon: Icons.badge_outlined,
-                  label: sl.scanModeDoc,
-                  selected: mode == _InputMode.document,
-                  onTap: () => onModeChange(_InputMode.document),
-                )),
-              ],
-            );
-          }),
+          // ── Check-out only: QR / Document input toggle ─────────────────
+          if (scanMode == ScanMode.checkOut) ...[
+            const SizedBox(height: 10),
+            Builder(builder: (ctx) {
+              final sl = ctx.watch<AppSettings>().s;
+              return Row(
+                children: [
+                  Expanded(child: _ModeChip(
+                    icon: Icons.qr_code_scanner,
+                    label: sl.scanModeScan,
+                    selected: inputMode == _InputMode.qr,
+                    onTap: () => onInputModeChange(_InputMode.qr),
+                  )),
+                  const SizedBox(width: 10),
+                  Expanded(child: _ModeChip(
+                    icon: Icons.badge_outlined,
+                    label: sl.scanModeDoc,
+                    selected: inputMode == _InputMode.document,
+                    onTap: () => onInputModeChange(_InputMode.document),
+                  )),
+                ],
+              );
+            }),
 
-          // ── Document ID input (visible in doc mode only) ─────────────
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeInOut,
-            child: mode == _InputMode.document
-                ? Builder(builder: (ctx) {
-                    final sl = ctx.watch<AppSettings>().s;
-                    return Padding(
-                    padding: const EdgeInsets.only(top: 14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          sl.docFieldLabel,
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
+            // ── Document ID input (visible in doc mode only) ────────────
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeInOut,
+              child: inputMode == _InputMode.document
+                  ? Builder(builder: (ctx) {
+                      final sl = ctx.watch<AppSettings>().s;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: TextField(
-                                controller: docCtrl,
-                                autofocus: mode == _InputMode.document,
-                                textInputAction: TextInputAction.search,
-                                onSubmitted: (_) => onSearch(),
-                                style: const TextStyle(color: Colors.white),
-                                decoration: InputDecoration(
-                                  hintText: sl.docFieldHint,
-                                  hintStyle: const TextStyle(color: Colors.white38),
-                                  prefixIcon: const Icon(Icons.badge_outlined,
-                                      color: Colors.white54),
-                                  filled: true,
-                                  fillColor: Colors.white12,
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    borderSide: BorderSide.none,
+                            Text(sl.docFieldLabel,
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: docCtrl,
+                                    autofocus: true,
+                                    textInputAction: TextInputAction.search,
+                                    onSubmitted: (_) => onSearch(),
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: InputDecoration(
+                                      hintText: sl.docFieldHint,
+                                      hintStyle: const TextStyle(
+                                          color: Colors.white38),
+                                      prefixIcon: const Icon(
+                                          Icons.badge_outlined,
+                                          color: Colors.white54),
+                                      filled: true,
+                                      fillColor: Colors.white12,
+                                      border: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                        borderSide: BorderSide.none,
+                                      ),
+                                      isDense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 14),
+                                    ),
                                   ),
-                                  isDense: true,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 14),
                                 ),
-                              ),
+                                const SizedBox(width: 10),
+                                FilledButton(
+                                  onPressed: docSearching ? null : onSearch,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.teal,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 14),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                  ),
+                                  child: docSearching
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                              color: Colors.white,
+                                              strokeWidth: 2))
+                                      : const Icon(Icons.search,
+                                          color: Colors.white),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 10),
-                            FilledButton(
-                              onPressed: docSearching ? null : onSearch,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: Colors.teal,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                              child: docSearching
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                          color: Colors.white, strokeWidth: 2))
-                                  : const Icon(Icons.search, color: Colors.white),
-                            ),
+                            const SizedBox(height: 6),
+                            Text(sl.docLookupHint,
+                                style: const TextStyle(
+                                    color: Colors.white38, fontSize: 10)),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          sl.docLookupHint,
-                          style: const TextStyle(color: Colors.white38, fontSize: 10),
-                        ),
-                      ],
-                    ),
-                  );
-                })
-                : const SizedBox.shrink(),
+                      );
+                    })
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── Mode label chip ───────────────────────────────────────────────────────────
+
+class _ModeLabelChip extends StatelessWidget {
+  final ScanMode mode;
+  const _ModeLabelChip({required this.mode});
+
+  @override
+  Widget build(BuildContext context) {
+    final isCheckIn = mode == ScanMode.checkIn;
+    final s = context.watch<AppSettings>().s;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: isCheckIn ? Colors.green.shade700 : Colors.deepPurple.shade700,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            isCheckIn ? Icons.login : Icons.payments_outlined,
+            color: Colors.white,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isCheckIn ? s.scanModeCheckIn : s.scanModeCheckOut,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
           ),
         ],
       ),
@@ -478,19 +620,17 @@ class _ModeChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  final Color? selectedColor;
 
   const _ModeChip({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
-    this.selectedColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = selectedColor ?? Colors.teal;
+    const activeColor = Colors.teal;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(

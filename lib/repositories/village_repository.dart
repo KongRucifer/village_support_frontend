@@ -15,10 +15,22 @@ class WithdrawOutcome {
   WithdrawOutcome({required this.synced, required this.newBalance});
 }
 
+/// Fixed deposit added to a member's savings balance on every check-in.
+/// Single source of truth for both the UI and the queued offline write.
+const int kCheckInDeposit = 195000;
+
+/// Description stored for a payment — mirrors the backend's wording so the
+/// offline history shows the same text the server records.
+String paymentDescriptionFor(PaymentMethodType pm) =>
+    pm == PaymentMethodType.bankTransfer
+        ? 'disbursement money for member by Bank Transfer'
+        : 'disbursement money for member by Cash';
+
 /// Result of a check-in attempt.
 class CheckInOutcome {
-  final bool synced; // reached the server (vbc_arrangement row created)
-  CheckInOutcome({required this.synced});
+  final bool synced;     // reached the server (vbc_arrangement row created)
+  final int newBalance;  // savings balance after the deposit
+  CheckInOutcome({required this.synced, required this.newBalance});
 }
 
 /// Local today's date as 'YYYY-MM-DD' (device-local, matches backend's
@@ -162,18 +174,20 @@ class VillageRepository {
   Future<CheckInOutcome> checkInAccount({
     required String token,
     required AccountOwner owner,
+    int amount = kCheckInDeposit,
   }) async {
     final online = await connectivity.isOnline() && token.isNotEmpty;
     final today = _todayStr();
 
     if (online) {
       try {
-        await api.checkIn(
+        final serverBalance = await api.checkIn(
           token: token,
           accNumber: owner.accNumber,
           vbCode: owner.vbCode,
+          amount: amount,
         );
-        // Server accepted → mirror the state locally (checked in).
+        // Server accepted → mirror the state locally (checked in + new balance).
         await db.upsertCheckinStatus(
           bankbookNumber: owner.bankbookNumber,
           vbCode: owner.vbCode,
@@ -181,7 +195,14 @@ class VillageRepository {
           points: 1,
           needSync: 'i',
         );
-        return CheckInOutcome(synced: true);
+        await db.applyLocalSavingsEdit(
+          accNumber: owner.accNumber,
+          clientId: owner.clientId,
+          bankbookNumber: owner.bankbookNumber,
+          newBalance: serverBalance,
+          pending: false,
+        );
+        return CheckInOutcome(synced: true, newBalance: serverBalance);
       } on ApiException {
         // Real server rejection (e.g. already checked in) — show the error.
         rethrow;
@@ -214,7 +235,9 @@ class VillageRepository {
       }
     }
 
-    // Record the check-in locally and queue it for sync.
+    // Deposit the fixed amount locally (optimistic) and queue both the check-in
+    // and the deposit so the server applies them once we're back online.
+    final newBalance = owner.currentBalance + amount;
     await db.upsertCheckinStatus(
       bankbookNumber: owner.bankbookNumber,
       vbCode: owner.vbCode,
@@ -222,22 +245,48 @@ class VillageRepository {
       points: 1,
       needSync: 'i',
     );
+    await db.applyLocalSavingsEdit(
+      accNumber: owner.accNumber,
+      clientId: owner.clientId,
+      bankbookNumber: owner.bankbookNumber,
+      newBalance: newBalance,
+      pending: true,
+    );
     await db.enqueueCheckin(
       accNumber: owner.accNumber,
       vbCode: owner.vbCode,
       bankbookNumber: owner.bankbookNumber,
       clientId: owner.clientId,
+      amount: amount,
+      newBalance: newBalance,
       createdAtIso: DateTime.now().toIso8601String(),
     );
-    return CheckInOutcome(synced: false);
+    return CheckInOutcome(synced: false, newBalance: newBalance);
   }
 
   /// Throws an [ApiException] with code 'LOSS_STATUS' if the account is on the
-  /// loss status (status_id == '4') — mirrors the backend guard.
+  /// loss status (status_id == '4') — mirrors the backend check-in guard.
   void _guardLossStatus(AccountOwner owner) {
     if (owner.statusId?.trim() == '4') {
       throw ApiException('Account is inactive (loss status)', 400, 'LOSS_STATUS');
     }
+  }
+
+  /// Throws 'NOT_ACTIVE' unless the account is active (status_id == '2') —
+  /// mirrors the backend checkout guard.
+  void _guardActiveForCheckout(AccountOwner owner) {
+    if (owner.statusId?.trim() != '2') {
+      throw ApiException('Account is not active', 400, 'NOT_ACTIVE');
+    }
+  }
+
+  /// Build the debit/credit account shown for a payment: vbCode prefixed onto the
+  /// cached tx-code (6607) base. Returns null when the base hasn't synced yet
+  /// (the display then falls back to the member account number).
+  Future<String?> _displayAcc(String vbCode) async {
+    final base = await db.getMeta('withdraw_debit_base');
+    if (base == null || base.trim().isEmpty) return null;
+    return vbCode.trim() + base.trim();
   }
 
   /// Withdraw (cut) money from savings. Online → creates a 3101 transaction on
@@ -292,9 +341,10 @@ class VillageRepository {
           bankbookNumber: owner.bankbookNumber,
           amount: amount,
           date: r.date.isNotEmpty ? r.date : nowIso,
-          description: note ?? 'Savings withdrawal',
+          description: note ?? paymentDescriptionFor(paymentMethod),
           paymentMethod: r.paymentMethod,
           pending: false,
+          displayAccNumber: await _displayAcc(owner.vbCode),
         ));
         return WithdrawOutcome(synced: true, newBalance: r.newBalance);
       } on ApiException {
@@ -307,7 +357,14 @@ class VillageRepository {
     }
 
     // ── Offline (or push failed): enforce the same guards the backend does ─────
-    _guardLossStatus(owner); // status_id == '4'
+    _guardActiveForCheckout(owner); // status_id must be '2' (active)
+
+    // No cash on hand for this village bank → block (best-effort offline guard;
+    // the backend re-validates authoritatively when the queued op is flushed).
+    final cash = await db.getVbCashBalance(owner.vbCode);
+    if (cash != null && cash <= 0) {
+      throw ApiException('No cash available', 400, 'NO_CASH');
+    }
 
     final st = await db.getCheckinStatus(owner.bankbookNumber, owner.vbCode, today);
     final points = st == null ? null : (st['points'] ?? -1) as int;
@@ -362,9 +419,10 @@ class VillageRepository {
       bankbookNumber: owner.bankbookNumber,
       amount: amount,
       date: nowIso,
-      description: note ?? 'Savings withdrawal (offline)',
+      description: note ?? paymentDescriptionFor(paymentMethod),
       paymentMethod: paymentMethod,
       pending: true,
+      displayAccNumber: await _displayAcc(owner.vbCode),
     ));
     return WithdrawOutcome(synced: false, newBalance: newBalance);
   }

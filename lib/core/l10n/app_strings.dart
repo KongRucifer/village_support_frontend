@@ -106,10 +106,19 @@ class AppStrings {
   // ── Check-in / Check-out scan ──────────────────────────────────────────────
   String get checkInTitle        => _s('Check In', 'ສະແກນເຂົ້າ');
   String get scanModeCheckIn     => _s('Check In', 'ສະແກນເຂົ້າ');
-  String get scanModeCheckOut    => _s('Check Out', 'ສະແກນອອກ');
+  String get scanModeCheckOut    => _s('Scan to pay', 'ສະແກນຈ່າຍ');
   String get btnConfirmCheckIn   => _s('Confirm Check In', 'ຢືນຢັນເຂົ້າ');
   String checkInSuccess(String name) =>
       _s('Checked in ✓  $name', 'ສະແກນເຂົ້າສຳເລັດ ✓  $name');
+
+  // ── Scan-mode picker (modal) ────────────────────────────────────────────────
+  String get scanModePickTitle    => _s('Select scan mode', 'ເລືອກໂໝດສະແກນ');
+  String get scanModeCheckInSub   => _s('Scan a member QR to check in', 'ສະແກນ QR ເພື່ອເຊັກອິນສະມາຊິກ');
+  String get scanModeCheckOutSub  => _s('Scan QR or enter Document ID to pay', 'ສະແກນ QR ຫຼື ປ້ອນເລກໄອດີ ເພື່ອຈ່າຍເງິນ');
+
+  // ── Check-in deposit card ───────────────────────────────────────────────────
+  String get checkInPaymentAmount => _s('Payment amount', 'ຊຳລະຈຳນວນເງີນ');
+  String get checkInNewBalance    => _s('New balance', 'ຍອດໃໝ່');
 
   /// Maps a backend error `code` to a localized message. Falls back to the
   /// raw server message when the code is unknown/null.
@@ -119,11 +128,11 @@ class AppStrings {
         return _s('This account is closed (loss status) — action not allowed.',
             'ບັນຊີນີ້ຖືກປິດ (ສະຖານະສູນເສຍ) — ບໍ່ສາມາດດຳເນີນການໄດ້');
       case 'ALREADY_CHECKED_IN_OUT_TODAY':
-        return _s('Already checked in and out today. Please check in next day.',
-            'ສະແກນເຂົ້າ ແລະ ອອກແລ້ວໃນມື້ນີ້, ກະລຸນາສະແກນເຂົ້າໃໝ່ໃນມື້ຕໍ່ໄປ');
+        return _s('Already checked in and  pay out today. Please check in next day.',
+            'ສະແກນເຂົ້າ ແລະ ສະເເກນຈ່າຍເງີນແລ້ວໃນມື້ນີ້, ກະລຸນາສະແກນເຂົ້າໃໝ່ໃນມື້ຕໍ່ໄປ');
       case 'ALREADY_CHECKED_IN':
-        return _s('Already checked in today. Must check out (pay) first.',
-            'ສະແກນເຂົ້າແລ້ວ, ຕ້ອງສະແກນອອກ (ຈ່າຍເງິນ) ກ່ອນ');
+        return _s('Already checked in today. Must Scan to (pay) first.',
+            'ສະແກນເຂົ້າແລ້ວ, ຕ້ອງສະແກນຈ່າຍ (ຈ່າຍເງິນ) ກ່ອນ');
       case 'ALREADY_CHECKED_OUT':
         return _s('Already paid today. Must check in again first.',
             'ຈ່າຍເງິນແລ້ວໃນມື້ນີ້, ຕ້ອງສະແກນເຂົ້າໃໝ່ກ່ອນ');
@@ -138,6 +147,11 @@ class AppStrings {
             'ບັນຊີບໍ່ກົງກັບໝູ່ບ້ານນີ້');
       case 'ACCOUNT_NOT_FOUND':
         return _s('Account not found.', 'ບໍ່ພົບບັນຊີ');
+      case 'NOT_ACTIVE':
+        return _s('This account is not active.',
+            'ບັນຊີນີ້ບໍ່ໄດ້ເປີດໃຊ້ງານ (ບໍ່ Active)');
+      case 'NO_CASH':
+        return _s('This account has no cash.', 'ບັນຊີນີ້ບໍ່ມີເງີນສົດ');
       default:
         return serverMsg;
     }

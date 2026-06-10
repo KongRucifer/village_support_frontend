@@ -233,11 +233,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                 Tooltip(
                   message: s.tooltipScan,
                   child: InkWell(
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ScanQrScreen(user: widget.user),
-                      ),
-                    ),
+                    onTap: () async {
+                      final nav = Navigator.of(context);
+                      final mode = await showScanModePicker(context);
+                      if (mode == null || !mounted) return;
+                      nav.push(
+                        MaterialPageRoute(
+                          builder: (_) => ScanQrScreen(
+                            user: widget.user,
+                            mode: mode,
+                          ),
+                        ),
+                      );
+                    },
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
                       padding: const EdgeInsets.all(10),

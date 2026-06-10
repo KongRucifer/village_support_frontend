@@ -188,6 +188,14 @@ class SyncService {
       if (snapshot.serverTime.isNotEmpty) {
         await db.setMeta(_kLastSync, snapshot.serverTime);
       }
+      // Cache the withdrawal tx-code (6607) debit/credit base so offline payments
+      // can build the same vbCode-prefixed account number for the pending row.
+      if (snapshot.withdrawDebitBase.isNotEmpty) {
+        await db.setMeta('withdraw_debit_base', snapshot.withdrawDebitBase);
+      }
+      if (snapshot.withdrawCreditBase.isNotEmpty) {
+        await db.setMeta('withdraw_credit_base', snapshot.withdrawCreditBase);
+      }
       // Mark the mirror complete only after a full pull actually finished
       // writing every table — so a timed-out/partial full pull is retried next
       // time instead of silently leaving the mirror incomplete.
@@ -248,20 +256,39 @@ class SyncService {
         // so the server has the check-in row before the withdraw validates it.
         if (op == 'checkin') {
           try {
-            await api.checkIn(
+            final serverBalance = await api.checkIn(
               token: token,
               accNumber: row['acc_number'] as String,
               vbCode: row['vb_code'] as String,
+              amount: (row['amount'] ?? 0) as int,
+            );
+            // Server applied the deposit — sync the authoritative balance and
+            // clear the pending flag on the cached account.
+            await db.applyLocalSavingsEdit(
+              accNumber: row['acc_number'] as String,
+              clientId: row['client_id'] as String,
+              bankbookNumber: row['bankbook_number'] as String,
+              newBalance: serverBalance,
+              pending: false,
             );
             await db.deleteOutbox(id);
             pushed++;
-            _log('  ✓ pushed checkin acc=$acc');
+            _log('  ✓ pushed checkin acc=$acc bal=$serverBalance');
           } on ApiException catch (e) {
             // Server permanently rejected (already checked in/out, loss status).
-            // Drop it so it never blocks the rest of the queue. Local state is
-            // already correct, so nothing else to do.
+            // The deposit was applied locally but never reached the server, so
+            // revert the optimistic balance: original = new_balance - amount.
+            final newBal = (row['new_balance'] ?? 0) as int;
+            final amt = (row['amount'] ?? 0) as int;
+            await db.applyLocalSavingsEdit(
+              accNumber: row['acc_number'] as String,
+              clientId: row['client_id'] as String,
+              bankbookNumber: row['bankbook_number'] as String,
+              newBalance: newBal - amt,
+              pending: false,
+            );
             await db.deleteOutbox(id);
-            _log('  ⚠ checkin acc=$acc rejected by server (dropped): '
+            _log('  ⚠ checkin acc=$acc rejected by server (deposit reverted): '
                 '${e.statusCode} ${e.code ?? ''} ${e.message}');
           }
           continue; // network errors fall to the outer catch → break + retry

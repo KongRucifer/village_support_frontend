@@ -12,6 +12,10 @@ class VbCode {
   final int clientCount;
   final int accountOwnerCount;
 
+  /// Village bank cash-on-hand (sum of the '110' account family). Only the sync
+  /// snapshot populates this; used by the offline no-cash checkout guard.
+  final int cashBalance;
+
   VbCode({
     required this.vbCode,
     required this.nameLao,
@@ -25,6 +29,7 @@ class VbCode {
     this.statusId,
     this.clientCount = 0,
     this.accountOwnerCount = 0,
+    this.cashBalance = 0,
   });
 
   factory VbCode.fromJson(Map<String, dynamic> j) => VbCode(
@@ -40,6 +45,7 @@ class VbCode {
         statusId: j['statusId']?.toString(),
         clientCount: (j['clientCount'] ?? 0) as int,
         accountOwnerCount: (j['accountOwnerCount'] ?? 0) as int,
+        cashBalance: (j['cashBalance'] ?? 0) as int,
       );
 
   /// Column map for SQLite (snake_case).
@@ -56,6 +62,7 @@ class VbCode {
         'status_id': statusId,
         'client_count': clientCount,
         'account_owner_count': accountOwnerCount,
+        'cash_balance': cashBalance,
       };
 
   factory VbCode.fromDb(Map<String, dynamic> r) => VbCode(
@@ -71,5 +78,6 @@ class VbCode {
         statusId: r['status_id'] as String?,
         clientCount: (r['client_count'] ?? 0) as int,
         accountOwnerCount: (r['account_owner_count'] ?? 0) as int,
+        cashBalance: (r['cash_balance'] ?? 0) as int,
       );
 }

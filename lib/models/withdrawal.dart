@@ -46,6 +46,10 @@ class Withdrawal {
   final PaymentMethodType paymentMethod;
   final bool pending; // queued locally, not yet on the server
 
+  /// Debit/credit account shown in the transactions list (vbCode + tx-code base).
+  /// Null on older rows / when the base isn't cached → falls back to [accNumber].
+  final String? displayAccNumber;
+
   Withdrawal({
     required this.txId,
     required this.accNumber,
@@ -57,6 +61,7 @@ class Withdrawal {
     this.txName,
     this.paymentMethod = PaymentMethodType.cash,
     this.pending = false,
+    this.displayAccNumber,
   });
 
   factory Withdrawal.fromJson(Map<String, dynamic> j) => Withdrawal(
@@ -83,6 +88,7 @@ class Withdrawal {
         'tx_name': txName,
         'payment_method': paymentMethod.apiValue,
         'pending': pending ? 1 : 0,
+        'display_acc': displayAccNumber,
       };
 
   factory Withdrawal.fromDb(Map<String, dynamic> r) => Withdrawal(
@@ -96,6 +102,7 @@ class Withdrawal {
         txName: r['tx_name'] as String?,
         paymentMethod: PaymentMethodType.fromApi(r['payment_method'] as String?),
         pending: ((r['pending'] ?? 0) as int) == 1,
+        displayAccNumber: r['display_acc'] as String?,
       );
 
   /// Convert to a [TransactionItem] so pending offline withdrawals can appear
@@ -108,9 +115,9 @@ class Withdrawal {
         txNameLao: txName ?? 'ຖອນເງິນຝາກ',
         txNameEng: txName ?? 'Savings withdrawal',
         amount: amount,
-        debitAccNumber: accNumber,
+        debitAccNumber: displayAccNumber ?? accNumber,
         debitAccNameLao: null,
-        creditAccNumber: accNumber,
+        creditAccNumber: displayAccNumber ?? accNumber,
         description: pending
             ? '${description ?? 'Savings withdrawal'} [ລໍຖ້າ sync]'
             : description,

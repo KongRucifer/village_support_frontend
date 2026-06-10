@@ -24,7 +24,7 @@ class LocalDb {
     final path = p.join(dir, 'village_support.db');
     return openDatabase(
       path,
-      version: 10,
+      version: 11,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
           await db.execute('ALTER TABLE account_owners ADD COLUMN pending INTEGER DEFAULT 0');
@@ -75,6 +75,17 @@ class LocalDb {
           await db.execute(_createIdDocumentsSql);
           await db.execute(_createTxAllSql);
         }
+        if (oldV < 11) {
+          // Per-vbCode cash-on-hand for the offline no-cash checkout guard, plus
+          // the display debit/credit account (vbCode + tx-code base) for pending
+          // offline withdrawals.
+          for (final sql in [
+            'ALTER TABLE vb_codes ADD COLUMN cash_balance INTEGER DEFAULT 0',
+            'ALTER TABLE withdrawals ADD COLUMN display_acc TEXT',
+          ]) {
+            try { await db.execute(sql); } catch (_) {}
+          }
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -90,7 +101,8 @@ class LocalDb {
             founding_date TEXT,
             status_id TEXT,
             client_count INTEGER DEFAULT 0,
-            account_owner_count INTEGER DEFAULT 0
+            account_owner_count INTEGER DEFAULT 0,
+            cash_balance INTEGER DEFAULT 0
           )
         ''');
         await db.execute('''
@@ -209,15 +221,17 @@ class LocalDb {
   }) async {
     final db = await database;
     final term = search?.trim();
+    // Only ACTIVE banks (status_id == '2') — mirrors the backend filter so the
+    // offline list matches even before the next delete-aware prune runs.
     final where = (term != null && term.isNotEmpty)
-        ? 'vb_code LIKE ? OR name_lao LIKE ? OR name_eng LIKE ?'
-        : null;
+        ? "status_id = '2' AND (vb_code LIKE ? OR name_lao LIKE ? OR name_eng LIKE ?)"
+        : "status_id = '2'";
     final args = (term != null && term.isNotEmpty)
         ? ['%$term%', '%$term%', '%$term%']
         : null;
 
     final countRows = await db.rawQuery(
-      'SELECT COUNT(*) AS c FROM vb_codes${where != null ? ' WHERE $where' : ''}',
+      'SELECT COUNT(*) AS c FROM vb_codes WHERE $where',
       args,
     );
     final total = (countRows.first['c'] as int?) ?? 0;
@@ -256,6 +270,20 @@ class LocalDb {
     final db = await database;
     final rows = await db.query('vb_codes', where: 'vb_code = ?', whereArgs: [vbCode]);
     return rows.isEmpty ? null : VbCode.fromDb(rows.first);
+  }
+
+  /// Cached cash-on-hand for a village bank (sum of the '110' account family),
+  /// used by the offline no-cash checkout guard. Returns null when unknown.
+  Future<int?> getVbCashBalance(String vbCode) async {
+    final db = await database;
+    final rows = await db.query(
+      'vb_codes',
+      columns: ['cash_balance'],
+      where: 'vb_code = ?',
+      whereArgs: [vbCode.trim()],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : (rows.first['cash_balance'] ?? 0) as int;
   }
 
   // ── Account owners ──────────────────────────────────────────────────────────
@@ -349,7 +377,8 @@ class LocalDb {
       description TEXT,
       tx_name TEXT,
       payment_method TEXT DEFAULT 'Cash',
-      pending INTEGER DEFAULT 0
+      pending INTEGER DEFAULT 0,
+      display_acc TEXT
     )
   ''';
 
@@ -522,11 +551,15 @@ class LocalDb {
   }
 
   /// Queue an offline check-in for later sync (outbox op = 'checkin').
+  /// Carries the fixed deposit [amount] and the resulting [newBalance] so the
+  /// push can re-apply the deposit on the server and clear the pending flag.
   Future<void> enqueueCheckin({
     required String accNumber,
     required String vbCode,
     required String bankbookNumber,
     required String clientId,
+    required int amount,
+    required int newBalance,
     required String createdAtIso,
   }) async {
     final db = await database;
@@ -536,6 +569,8 @@ class LocalDb {
       'vb_code': vbCode,
       'bankbook_number': bankbookNumber,
       'client_id': clientId,
+      'amount': amount,
+      'new_balance': newBalance,
       'created_at': createdAtIso,
     });
   }
