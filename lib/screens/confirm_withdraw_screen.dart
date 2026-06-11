@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/providers/app_settings.dart';
 import '../core/widgets/settings_button.dart';
@@ -10,12 +11,15 @@ import '../services/app_services.dart';
 import '../services/api_client.dart';
 import '../widgets/top_toast.dart';
 
-/// Fixed payment amount (per business rule — cannot be changed by the user).
-const int kPaymentAmount = 195000;
+/// Default per-payment amount when the dashboard hasn't configured one yet.
+const int kDefaultPaymentAmount = 0;
+
+/// shared_preferences key holding the configurable per-payment amount.
+const String kPaymentAmountKey = 'payment_amount';
 
 /// Confirmation page shown after a successful QR scan or document lookup.
-/// Payment amount is fixed at [kPaymentAmount] ₭. User chooses payment method
-/// and confirms (or cancels).
+/// The per-payment amount is configured on the dashboard (shared_preferences);
+/// when a member has unpaid check-ins, the full overdue total is paid instead.
 class ConfirmWithdrawScreen extends StatefulWidget {
   final SystemUser user;
   final AccountOwner owner;
@@ -35,11 +39,52 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
 
   PaymentMethodType _paymentMethod = PaymentMethodType.cash;
   bool _processing = false;
-  late int _balance = widget.owner.currentBalance;
+  late final int _balance = widget.owner.currentBalance;
+
+  /// Configurable per-payment amount (set on the dashboard, shared_preferences).
+  int _paymentAmount = kDefaultPaymentAmount;
+
+  /// Overdue summary (loaded from the server / offline cache when the page opens).
+  int _overduePayment = 0;
+  int _overdueCount = 0;
 
   // Bank Transfer recipient fields
   final _reqNameCtrl   = TextEditingController();
   final _reqAccCtrl    = TextEditingController();
+
+  /// Amount actually sent to the withdraw API: the full overdue total when known,
+  /// otherwise the configured per-payment amount.
+  int get _amountToSend => _overduePayment > 0 ? _overduePayment : _paymentAmount;
+
+  /// Whether to surface the overdue UI. [_overdueCount] is the backlog count the
+  /// server already decremented by one, so anything > 0 means there's a backlog.
+  bool get _showOverdue => _overdueCount > 0 && _overduePayment > 0;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      final v = prefs.getInt(kPaymentAmountKey);
+      if (v != null && v > 0 && mounted) setState(() => _paymentAmount = v);
+    });
+    _loadOverdue();
+  }
+
+  Future<void> _loadOverdue() async {
+    try {
+      final info = await _services.village.overdueFor(
+        token: widget.user.token,
+        owner: widget.owner,
+      );
+      if (!mounted) return;
+      setState(() {
+        _overduePayment = info.overduePayment;
+        _overdueCount = info.overdueCount;
+      });
+    } catch (_) {
+      // Leave the defaults (0/0) → the screen behaves like a normal single payment.
+    }
+  }
 
   @override
   void dispose() {
@@ -60,8 +105,9 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
 
   Future<void> _confirm() async {
     final s = context.read<AppSettings>().s;
-    if (_balance < kPaymentAmount) {
-      TopToast.error(context, s.insufficientBalance(_money(kPaymentAmount), _money(_balance)));
+    final payAmount = _amountToSend;
+    if (_balance < payAmount) {
+      TopToast.error(context, s.insufficientBalance(_money(payAmount), _money(_balance)));
       return;
     }
     if (_paymentMethod == PaymentMethodType.bankTransfer) {
@@ -74,7 +120,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
       final outcome = await _services.village.withdrawSavings(
         token: widget.user.token,
         owner: widget.owner,
-        amount: kPaymentAmount,
+        amount: payAmount,
         currentBalance: _balance,
         paymentMethod: _paymentMethod,
         // No note → the backend fills the UNDP disbursement description itself.
@@ -83,7 +129,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
       );
       if (!mounted) return;
       final tail = outcome.synced ? '' : ' ${s.paySuccessOffline}';
-      TopToast.success(context, s.paySuccess(_money(kPaymentAmount), _paymentMethod.shortLabel, _money(outcome.newBalance)) + tail);
+      TopToast.success(context, s.paySuccess(_money(payAmount), _paymentMethod.shortLabel, _money(outcome.newBalance)) + tail);
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
@@ -105,7 +151,8 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
   Widget build(BuildContext context) {
     final o   = widget.owner;
     final s   = context.watch<AppSettings>().s;
-    final canPay = _balance >= kPaymentAmount;
+    final cs  = Theme.of(context).colorScheme;
+    final canPay = _balance >= _amountToSend;
 
     return Scaffold(
       appBar: AppBar(
@@ -121,37 +168,68 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
             _DetailCard(owner: o, balance: _balance, money: _money),
             const SizedBox(height: 20),
 
-            // ── Fixed payment amount display (read-only) ────────────────────
+            // ── Overdue summary (only when there's a backlog of unpaid check-ins) ─
+            if (_showOverdue) ...[
+              _OverdueCard(
+                total: _overduePayment - _paymentAmount,
+                count: _overdueCount,
+                money: _money,
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // ── Payment amount display (read-only) ──────────────────────────
             Text(s.confirmAmountLabel,
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.35),
+                color: cs.primaryContainer.withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4), width: 2),
+                border: Border.all(color: cs.primary.withValues(alpha: 0.4), width: 2),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
                 children: [
-                  Text(s.confirmAmountSub,
-                      style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14)),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('${_money(kPaymentAmount)} ₭',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          )),
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: s.confirmAmountTooltip,
-                        child: Icon(Icons.lock, size: 16, color: Theme.of(context).colorScheme.primary),
+                      Text(s.confirmAmountSub,
+                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 14)),
+                      Row(
+                        children: [
+                          Text('${_money(_paymentAmount)} ₭',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: cs.primary,
+                              )),
+                          const SizedBox(width: 8),
+                          Tooltip(
+                            message: s.confirmAmountTooltip,
+                            child: Icon(Icons.lock, size: 16, color: cs.primary),
+                          ),
+                        ],
                       ),
                     ],
                   ),
+                  // Full amount actually paid (= overdue total) when there's a backlog.
+                  if (_showOverdue) ...[
+                    Divider(height: 16, color: cs.outlineVariant),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(s.totalPaymentAmount,
+                            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+                        Text('${_money(_overduePayment)} ₭',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: cs.primary,
+                            )),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -159,7 +237,7 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
-                  s.insufficientBalance(_money(kPaymentAmount), _money(_balance)),
+                  s.insufficientBalance(_money(_amountToSend), _money(_balance)),
                   style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ),
@@ -269,6 +347,59 @@ class _ConfirmWithdrawScreenState extends State<ConfirmWithdrawScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Overdue summary card (dark/light aware) ─────────────────────────────────────
+
+class _OverdueCard extends StatelessWidget {
+  /// Backlog amount = overdue total minus the current period's payment amount.
+  final int total;
+  final int count;
+  final String Function(int) money;
+  const _OverdueCard({required this.total, required this.count, required this.money});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final accent = isDark ? Colors.orange.shade300 : Colors.orange.shade800;
+    final s = context.watch<AppSettings>().s;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: isDark ? 0.16 : 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: accent),
+                  const SizedBox(width: 6),
+                  Text(s.overdueTotal, style: TextStyle(color: cs.onSurfaceVariant)),
+                ],
+              ),
+              Text('${money(total)} ₭',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: accent)),
+            ],
+          ),
+          Divider(height: 16, color: cs.outlineVariant),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(s.overdueCountLabel, style: TextStyle(color: cs.onSurfaceVariant)),
+              Text('$count ${s.overdueTimesUnit}',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurface)),
+            ],
+          ),
+        ],
       ),
     );
   }

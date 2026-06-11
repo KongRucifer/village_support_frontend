@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/providers/app_settings.dart';
 import '../core/widgets/settings_button.dart';
 import '../models/account_owner.dart';
 import '../models/system_user.dart';
-import '../repositories/village_repository.dart'; // kCheckInDeposit
+import '../screens/confirm_withdraw_screen.dart'; // kPaymentAmountKey + kDefaultPaymentAmount
 import '../services/app_services.dart';
 import '../services/api_client.dart';
 import '../widgets/top_toast.dart';
@@ -32,6 +33,20 @@ class _ConfirmCheckInScreenState extends State<ConfirmCheckInScreen> {
   final _services = AppServices.instance;
   bool _processing = false;
 
+  /// Deposit added on check-in — configured on the dashboard (shared_preferences),
+  /// same value as the checkout payment amount. Defaults to 0 until the dashboard
+  /// amount is set.
+  int _deposit = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      final v = prefs.getInt(kPaymentAmountKey);
+      if (v != null && v > 0 && mounted) setState(() => _deposit = v);
+    });
+  }
+
   String _money(int v) {
     final s = v.abs().toString();
     final buf = StringBuffer();
@@ -49,14 +64,14 @@ class _ConfirmCheckInScreenState extends State<ConfirmCheckInScreen> {
       final outcome = await _services.village.checkInAccount(
         token: widget.user.token,
         owner: widget.owner,
-        amount: kCheckInDeposit,
+        amount: _deposit,
       );
       if (!mounted) return;
       final tail = outcome.synced ? '' : ' ${s.paySuccessOffline}';
       TopToast.success(
         context,
         '${s.checkInSuccess(widget.owner.clientName)}'
-        ' (+${_money(kCheckInDeposit)} ₭ → ${_money(outcome.newBalance)} ₭)$tail',
+        ' (+${_money(_deposit)} ₭ → ${_money(outcome.newBalance)} ₭)$tail',
       );
       await Future.delayed(const Duration(milliseconds: 900));
       if (mounted) Navigator.of(context).pop();
@@ -108,7 +123,7 @@ class _ConfirmCheckInScreenState extends State<ConfirmCheckInScreen> {
                       children: [
                         Text(s.checkInPaymentAmount,
                             style: TextStyle(color: cs.onSurfaceVariant)),
-                        Text('+${_money(kCheckInDeposit)} ₭',
+                        Text('+${_money(_deposit)} ₭',
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.green)),
@@ -120,7 +135,7 @@ class _ConfirmCheckInScreenState extends State<ConfirmCheckInScreen> {
                       children: [
                         Text(s.checkInNewBalance,
                             style: TextStyle(color: cs.onSurfaceVariant)),
-                        Text('${_money(o.currentBalance + kCheckInDeposit)} ₭',
+                        Text('${_money(o.currentBalance + _deposit)} ₭',
                             style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,

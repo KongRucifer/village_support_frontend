@@ -167,6 +167,43 @@ class VillageRepository {
     return db.getAccountOwnerByClientId(clientId, vbCode: vbCode);
   }
 
+  /// Overdue summary for the checkout screen. Online → live from the server
+  /// (and cached locally so it works offline); offline → the last cached value.
+  Future<OverdueInfo> overdueFor({
+    required String token,
+    required AccountOwner owner,
+  }) async {
+    if (await connectivity.isOnline() && token.isNotEmpty) {
+      try {
+        final info = await api.getOverdue(
+          token: token,
+          accNumber: owner.accNumber,
+          vbCode: owner.vbCode,
+        );
+        // The endpoint already returns the decremented backlog count. Cache only
+        // the (raw) overdue total — the raw check-in count cache is maintained by
+        // sync and the offline check-in/checkout hooks, so we don't overwrite it.
+        await db.setOverduePaymentForAccount(
+          accNumber: owner.accNumber,
+          clientId: owner.clientId,
+          bankbookNumber: owner.bankbookNumber,
+          overduePayment: info.overduePayment,
+        );
+        return info; // overdueCount is already the decremented backlog count
+      } catch (_) {
+        // fall through to the cached value
+      }
+    }
+    // Offline: read the RAW cached values and apply the same "-1" the server
+    // does, so the UI's hide-when-<=0 rule behaves identically with no internet.
+    final cached = await db.getOverdueForAccount(owner.accNumber);
+    final rawCount = cached?.overdueCount ?? owner.overdueCount;
+    return OverdueInfo(
+      overduePayment: cached?.overduePayment ?? owner.overduePayment,
+      overdueCount: rawCount > 0 ? rawCount - 1 : 0,
+    );
+  }
+
   /// Check in a member. Online → inserts a vbc_arrangement row on the server.
   /// Offline (or server unreachable) → enforces the same guards locally and
   /// queues the check-in for sync. Throws [ApiException] (with an error `code`)
@@ -202,6 +239,15 @@ class VillageRepository {
           newBalance: serverBalance,
           pending: false,
         );
+        // Keep the cached overdue in step so an offline checkout right after an
+        // online check-in still shows/pays the right total (re-fetched & made
+        // authoritative whenever the checkout screen loads online).
+        await db.bumpOverdueOnCheckin(
+          accNumber: owner.accNumber,
+          clientId: owner.clientId,
+          bankbookNumber: owner.bankbookNumber,
+          amount: amount,
+        );
         return CheckInOutcome(synced: true, newBalance: serverBalance);
       } on ApiException {
         // Real server rejection (e.g. already checked in) — show the error.
@@ -212,8 +258,6 @@ class VillageRepository {
     }
 
     // ── Offline path: enforce the same guards the backend does ────────────────
-    _guardLossStatus(owner); // status_id == '4'
-
     final st = await db.getCheckinStatus(owner.bankbookNumber, owner.vbCode, today);
     if (kDebugMode) {
       final allToday = await db.debugCheckinsForDate(today);
@@ -236,40 +280,47 @@ class VillageRepository {
     }
 
     // Deposit the fixed amount locally (optimistic) and queue both the check-in
-    // and the deposit so the server applies them once we're back online.
+    // and the deposit so the server applies them once we're back online. All in
+    // ONE SQLite transaction so a failure can't leave the deposit applied without
+    // the matching queued op (which would otherwise never sync to the server).
     final newBalance = owner.currentBalance + amount;
-    await db.upsertCheckinStatus(
-      bankbookNumber: owner.bankbookNumber,
-      vbCode: owner.vbCode,
-      date: today,
-      points: 1,
-      needSync: 'i',
-    );
-    await db.applyLocalSavingsEdit(
-      accNumber: owner.accNumber,
-      clientId: owner.clientId,
-      bankbookNumber: owner.bankbookNumber,
-      newBalance: newBalance,
-      pending: true,
-    );
-    await db.enqueueCheckin(
-      accNumber: owner.accNumber,
-      vbCode: owner.vbCode,
-      bankbookNumber: owner.bankbookNumber,
-      clientId: owner.clientId,
-      amount: amount,
-      newBalance: newBalance,
-      createdAtIso: DateTime.now().toIso8601String(),
-    );
+    final nowIso = DateTime.now().toIso8601String();
+    await db.runInTransaction((txn) async {
+      await db.upsertCheckinStatus(
+        bankbookNumber: owner.bankbookNumber,
+        vbCode: owner.vbCode,
+        date: today,
+        points: 1,
+        needSync: 'i',
+        txn: txn,
+      );
+      await db.applyLocalSavingsEdit(
+        accNumber: owner.accNumber,
+        clientId: owner.clientId,
+        bankbookNumber: owner.bankbookNumber,
+        newBalance: newBalance,
+        pending: true,
+        txn: txn,
+      );
+      await db.bumpOverdueOnCheckin(
+        accNumber: owner.accNumber,
+        clientId: owner.clientId,
+        bankbookNumber: owner.bankbookNumber,
+        amount: amount,
+        txn: txn,
+      );
+      await db.enqueueCheckin(
+        accNumber: owner.accNumber,
+        vbCode: owner.vbCode,
+        bankbookNumber: owner.bankbookNumber,
+        clientId: owner.clientId,
+        amount: amount,
+        newBalance: newBalance,
+        createdAtIso: nowIso,
+        txn: txn,
+      );
+    });
     return CheckInOutcome(synced: false, newBalance: newBalance);
-  }
-
-  /// Throws an [ApiException] with code 'LOSS_STATUS' if the account is on the
-  /// loss status (status_id == '4') — mirrors the backend check-in guard.
-  void _guardLossStatus(AccountOwner owner) {
-    if (owner.statusId?.trim() == '4') {
-      throw ApiException('Account is inactive (loss status)', 400, 'LOSS_STATUS');
-    }
   }
 
   /// Throws 'NOT_ACTIVE' unless the account is active (status_id == '2') —
@@ -323,6 +374,12 @@ class VillageRepository {
           bankbookNumber: owner.bankbookNumber,
           newBalance: r.newBalance,
           pending: false,
+        );
+        // The full overdue was paid out — reset the cached overdue summary.
+        await db.clearOverdueOnCheckout(
+          accNumber: owner.accNumber,
+          clientId: owner.clientId,
+          bankbookNumber: owner.bankbookNumber,
         );
         // Server marked the member checked-out — mirror it locally.
         await db.upsertCheckinStatus(
@@ -382,48 +439,65 @@ class VillageRepository {
       throw ApiException('Insufficient savings balance', 400, 'INSUFFICIENT_BALANCE');
     }
 
-    // Offline (or push failed): keep locally + queue.
+    // Offline (or push failed): keep locally + queue — all in ONE SQLite
+    // transaction so a failure can't leave a half-applied checkout (e.g. balance
+    // lowered but the outbox op never queued → the payment would never sync).
     final newBalance = currentBalance - amount;
-    // Mark the member checked-out locally so the guards above stay consistent.
-    await db.upsertCheckinStatus(
-      bankbookNumber: owner.bankbookNumber,
-      vbCode: owner.vbCode,
-      date: today,
-      points: 0,
-      needSync: 'u',
-      lastUpdate: nowIso,
-    );
-    await db.applyLocalSavingsEdit(
-      accNumber: owner.accNumber,
-      clientId: owner.clientId,
-      bankbookNumber: owner.bankbookNumber,
-      newBalance: newBalance,
-      pending: true,
-    );
-    await db.enqueueWithdraw(
-      accNumber: owner.accNumber,
-      vbCode: owner.vbCode,
-      bankbookNumber: owner.bankbookNumber,
-      clientId: owner.clientId,
-      amount: amount,
-      paymentMethod: paymentMethod.apiValue,
-      note: note,
-      requestName: requestName,
-      requestAccNumber: requestAccNumber,
-      createdAtIso: nowIso,
-    );
-    await db.insertLocalWithdrawal(Withdrawal(
-      txId: 'local-${DateTime.now().microsecondsSinceEpoch}',
-      accNumber: owner.accNumber,
-      vbCode: owner.vbCode,
-      bankbookNumber: owner.bankbookNumber,
-      amount: amount,
-      date: nowIso,
-      description: note ?? paymentDescriptionFor(paymentMethod),
-      paymentMethod: paymentMethod,
-      pending: true,
-      displayAccNumber: await _displayAcc(owner.vbCode),
-    ));
+    final displayAcc = await _displayAcc(owner.vbCode); // read before the txn
+    await db.runInTransaction((txn) async {
+      // Mark the member checked-out locally so the guards above stay consistent.
+      await db.upsertCheckinStatus(
+        bankbookNumber: owner.bankbookNumber,
+        vbCode: owner.vbCode,
+        date: today,
+        points: 0,
+        needSync: 'u',
+        lastUpdate: nowIso,
+        txn: txn,
+      );
+      await db.applyLocalSavingsEdit(
+        accNumber: owner.accNumber,
+        clientId: owner.clientId,
+        bankbookNumber: owner.bankbookNumber,
+        newBalance: newBalance,
+        pending: true,
+        txn: txn,
+      );
+      await db.clearOverdueOnCheckout(
+        accNumber: owner.accNumber,
+        clientId: owner.clientId,
+        bankbookNumber: owner.bankbookNumber,
+        txn: txn,
+      );
+      await db.enqueueWithdraw(
+        accNumber: owner.accNumber,
+        vbCode: owner.vbCode,
+        bankbookNumber: owner.bankbookNumber,
+        clientId: owner.clientId,
+        amount: amount,
+        paymentMethod: paymentMethod.apiValue,
+        note: note,
+        requestName: requestName,
+        requestAccNumber: requestAccNumber,
+        createdAtIso: nowIso,
+        txn: txn,
+      );
+      await db.insertLocalWithdrawal(
+        Withdrawal(
+          txId: 'local-${DateTime.now().microsecondsSinceEpoch}',
+          accNumber: owner.accNumber,
+          vbCode: owner.vbCode,
+          bankbookNumber: owner.bankbookNumber,
+          amount: amount,
+          date: nowIso,
+          description: note ?? paymentDescriptionFor(paymentMethod),
+          paymentMethod: paymentMethod,
+          pending: true,
+          displayAccNumber: displayAcc,
+        ),
+        txn,
+      );
+    });
     return WithdrawOutcome(synced: false, newBalance: newBalance);
   }
 

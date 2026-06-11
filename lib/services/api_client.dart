@@ -205,6 +205,37 @@ class ApiClient {
     );
   }
 
+  // ── Overdue payment summary for an account ──────────────────────────────────
+  /// Returns the accumulated unpaid equity-saving balance (overduePayment) and
+  /// the number of unpaid check-ins (countOverduePayment).
+  Future<OverdueInfo> getOverdue({
+    required String token,
+    required String accNumber,
+    String? vbCode,
+  }) async {
+    final res = await _http
+        .get(
+          _uri('/village-data/accounts/${accNumber.trim()}/overdue', {
+            if (vbCode != null && vbCode.isNotEmpty) 'vbCode': vbCode,
+          }),
+          headers: _headers(token),
+        )
+        .timeout(AppConfig.apiTimeout);
+
+    final body = _decode(res);
+    if (res.statusCode != 200) {
+      throw ApiException(
+        _errorMessage(body, 'Failed to load overdue'),
+        res.statusCode,
+        _errorCode(body),
+      );
+    }
+    return OverdueInfo(
+      overduePayment: (body['overduePayment'] ?? 0) as int,
+      overdueCount: (body['countOverduePayment'] ?? 0) as int,
+    );
+  }
+
   // ── Check in (records vbc_arrangement + deposits the fixed amount) ───────────
   /// Throws [ApiException] with statusCode 409 if already checked in.
   /// Returns the account's new savings balance after the deposit.
@@ -436,6 +467,15 @@ class ApiClient {
     final code = body['code'];
     return code is String ? code : null;
   }
+}
+
+/// Overdue payment summary for an account ([ApiClient.getOverdue]).
+class OverdueInfo {
+  /// Accumulated unpaid equity-saving balance (the amount that will be paid out).
+  final int overduePayment;
+  /// Number of unpaid check-ins.
+  final int overdueCount;
+  const OverdueInfo({this.overduePayment = 0, this.overdueCount = 0});
 }
 
 class WithdrawResult {

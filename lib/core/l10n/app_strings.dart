@@ -162,6 +162,11 @@ class AppStrings {
   String get confirmAmountLabel  => _s('Payment Amount', 'ຈຳນວນເງິນທີ່ຈ່າຍ');
   String get confirmAmountSub    => _s('Amount', 'ຈຳນວນ');
   String get confirmAmountTooltip => _s('Fixed amount — cannot be changed', 'ຈຳນວນຄົງທີ່ — ບໍ່ສາມາດປ່ຽນໄດ້');
+  // ── Overdue payment ───────────────────────────────────────────────────────
+  String get overdueTotal        => _s('Total overdue', 'ຄ້າງຊຳລະທັງໝົດ');
+  String get overdueCountLabel   => _s('Overdue count', 'ຈຳນວນຄັ້ງທີ່ຄ້າງຊຳລະ');
+  String get overdueTimesUnit    => _s('times', 'ຄັ້ງ');
+  String get totalPaymentAmount  => _s('Total payment amount', 'ຍອດຊຳລະທັງໝົດ');
   String insufficientBalance(String need, String have) =>
       _s('Insufficient balance (need $need ₭, have $have ₭)', 'ຍອດຝາກບໍ່ພໍ (ຕ້ອງ $need ₭, ມີ $have ₭)');
   String get confirmPayMethod    => _s('Payment Method', 'ວິທີຈ່າຍ');

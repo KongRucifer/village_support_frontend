@@ -10,6 +10,13 @@ class AccountOwner {
   final String? accountType;
   final String? statusId;
 
+  /// Accumulated unpaid equity-saving balance (server-computed sum). Drives the
+  /// checkout "overdue" card; cached so it works offline too.
+  final int overduePayment;
+
+  /// Number of unpaid check-ins (vbc_arrangement rows with need_sync = 'i').
+  final int overdueCount;
+
   /// True when a local edit hasn't been pushed to the server yet (offline queue).
   final bool pending;
 
@@ -24,6 +31,8 @@ class AccountOwner {
     this.currentBalance = 0,
     this.accountType,
     this.statusId,
+    this.overduePayment = 0,
+    this.overdueCount = 0,
     this.pending = false,
   });
 
@@ -38,6 +47,8 @@ class AccountOwner {
         currentBalance: (j['currentBalance'] ?? 0) as int,
         accountType: j['accountType'] as String?,
         statusId: j['statusId']?.toString(),
+        overduePayment: (j['overduePayment'] ?? 0) as int,
+        overdueCount: (j['overdueCount'] ?? 0) as int,
       );
 
   Map<String, dynamic> toDb() => {
@@ -51,6 +62,8 @@ class AccountOwner {
         'current_balance': currentBalance,
         'account_type': accountType,
         'status_id': statusId,
+        'overdue_payment': overduePayment,
+        'overdue_count': overdueCount,
       };
 
   factory AccountOwner.fromDb(Map<String, dynamic> r) => AccountOwner(
@@ -64,6 +77,8 @@ class AccountOwner {
         currentBalance: (r['current_balance'] ?? 0) as int,
         accountType: r['account_type'] as String?,
         statusId: r['status_id'] as String?,
+        overduePayment: (r['overdue_payment'] ?? 0) as int,
+        overdueCount: (r['overdue_count'] ?? 0) as int,
         pending: ((r['pending'] ?? 0) as int) == 1,
       );
 }

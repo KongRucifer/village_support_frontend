@@ -24,7 +24,7 @@ class LocalDb {
     final path = p.join(dir, 'village_support.db');
     return openDatabase(
       path,
-      version: 11,
+      version: 12,
       onUpgrade: (db, oldV, newV) async {
         if (oldV < 2) {
           await db.execute('ALTER TABLE account_owners ADD COLUMN pending INTEGER DEFAULT 0');
@@ -86,6 +86,16 @@ class LocalDb {
             try { await db.execute(sql); } catch (_) {}
           }
         }
+        if (oldV < 12) {
+          // Cached overdue summary per account (accumulated unpaid equity-saving
+          // balance + count of unpaid check-ins) for the offline checkout card.
+          for (final sql in [
+            'ALTER TABLE account_owners ADD COLUMN overdue_payment INTEGER DEFAULT 0',
+            'ALTER TABLE account_owners ADD COLUMN overdue_count INTEGER DEFAULT 0',
+          ]) {
+            try { await db.execute(sql); } catch (_) {}
+          }
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -117,6 +127,8 @@ class LocalDb {
             current_balance INTEGER DEFAULT 0,
             account_type TEXT,
             status_id TEXT,
+            overdue_payment INTEGER DEFAULT 0,
+            overdue_count INTEGER DEFAULT 0,
             pending INTEGER DEFAULT 0,
             PRIMARY KEY (bankbook_number, acc_number, client_id)
           )
@@ -390,11 +402,86 @@ class LocalDb {
     required String bankbookNumber,
     required int newBalance,
     required bool pending,
+    DatabaseExecutor? txn,
   }) async {
-    final db = await database;
+    final db = txn ?? await database;
     await db.update(
       'account_owners',
       {'current_balance': newBalance, 'pending': pending ? 1 : 0},
+      where: 'acc_number = ? AND client_id = ? AND bankbook_number = ?',
+      whereArgs: [accNumber, clientId, bankbookNumber],
+    );
+  }
+
+  /// Cache the server-computed overdue TOTAL for an account (used offline).
+  /// Only the (raw) overdue amount is written — the raw unpaid check-in count is
+  /// kept by sync + the offline check-in/checkout hooks, so it is never
+  /// overwritten with the server's already-decremented backlog count.
+  Future<void> setOverduePaymentForAccount({
+    required String accNumber,
+    required String clientId,
+    required String bankbookNumber,
+    required int overduePayment,
+    DatabaseExecutor? txn,
+  }) async {
+    final db = txn ?? await database;
+    await db.update(
+      'account_owners',
+      {'overdue_payment': overduePayment},
+      where: 'acc_number = ? AND client_id = ? AND bankbook_number = ?',
+      whereArgs: [accNumber, clientId, bankbookNumber],
+    );
+  }
+
+  /// Read the cached overdue summary for an account, or null if unknown.
+  /// `overdueCount` is the RAW unpaid check-in count (not yet decremented).
+  Future<({int overduePayment, int overdueCount})?> getOverdueForAccount(
+      String accNumber) async {
+    final db = await database;
+    final rows = await db.query(
+      'account_owners',
+      columns: ['overdue_payment', 'overdue_count'],
+      where: 'acc_number = ?',
+      whereArgs: [accNumber.trim()],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return (
+      overduePayment: (rows.first['overdue_payment'] ?? 0) as int,
+      overdueCount: (rows.first['overdue_count'] ?? 0) as int,
+    );
+  }
+
+  /// Offline check-in: add the deposit to the cached overdue total and count one
+  /// more unpaid check-in (mirrors the server's effect on the overdue summary).
+  Future<void> bumpOverdueOnCheckin({
+    required String accNumber,
+    required String clientId,
+    required String bankbookNumber,
+    required int amount,
+    DatabaseExecutor? txn,
+  }) async {
+    final db = txn ?? await database;
+    await db.rawUpdate(
+      'UPDATE account_owners '
+      'SET overdue_payment = overdue_payment + ?, overdue_count = overdue_count + 1 '
+      'WHERE acc_number = ? AND client_id = ? AND bankbook_number = ?',
+      [amount, accNumber, clientId, bankbookNumber],
+    );
+  }
+
+  /// Offline checkout: the full overdue is paid out, so reset it to zero
+  /// (mirrors the server zeroing every equity-saving arrangement row).
+  Future<void> clearOverdueOnCheckout({
+    required String accNumber,
+    required String clientId,
+    required String bankbookNumber,
+    DatabaseExecutor? txn,
+  }) async {
+    final db = txn ?? await database;
+    await db.update(
+      'account_owners',
+      {'overdue_payment': 0, 'overdue_count': 0},
       where: 'acc_number = ? AND client_id = ? AND bankbook_number = ?',
       whereArgs: [accNumber, clientId, bankbookNumber],
     );
@@ -470,8 +557,9 @@ class LocalDb {
     required int points,
     required String needSync,
     String? lastUpdate,
+    DatabaseExecutor? txn,
   }) async {
-    final db = await database;
+    final db = txn ?? await database;
     await db.insert(
       'checkin_status',
       {
@@ -561,8 +649,9 @@ class LocalDb {
     required int amount,
     required int newBalance,
     required String createdAtIso,
+    DatabaseExecutor? txn,
   }) async {
-    final db = await database;
+    final db = txn ?? await database;
     await db.insert('outbox', {
       'op': 'checkin',
       'acc_number': accNumber,
@@ -586,8 +675,9 @@ class LocalDb {
     String? requestAccNumber,
     String? note,
     required String createdAtIso,
+    DatabaseExecutor? txn,
   }) async {
-    final db = await database;
+    final db = txn ?? await database;
     await db.insert('outbox', {
       'op': 'withdraw',
       'acc_number': accNumber,
@@ -625,10 +715,19 @@ class LocalDb {
   }
 
   /// Insert a locally-made (offline) withdrawal so it shows immediately.
-  Future<void> insertLocalWithdrawal(Withdrawal w) async {
-    final db = await database;
+  Future<void> insertLocalWithdrawal(Withdrawal w, [DatabaseExecutor? txn]) async {
+    final db = txn ?? await database;
     await db.insert('withdrawals', w.toDb(),
         conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Run [action] inside a single SQLite transaction so a group of local writes
+  /// commits all-or-nothing (offline check-in / checkout atomicity). Pass the
+  /// provided [Transaction] to the `txn:` parameter of the write helpers.
+  Future<T> runInTransaction<T>(
+      Future<T> Function(Transaction txn) action) async {
+    final db = await database;
+    return db.transaction(action);
   }
 
   Future<PagedResult<Withdrawal>> queryWithdrawals({

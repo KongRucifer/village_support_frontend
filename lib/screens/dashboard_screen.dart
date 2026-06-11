@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/l10n/app_strings.dart';
 import '../core/providers/app_settings.dart';
@@ -28,7 +30,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     with WidgetsBindingObserver {
   final _services = AppServices.instance;
   final _searchCtrl = TextEditingController();
+  final _amountCtrl = TextEditingController();
 
+  static const String _kAmountKey = 'payment_amount';
+  static const int _kDefaultAmount = 0;
   static const int _limit = 12;
   // How often to refresh SQLite in the background while the app is alive.
   static const Duration _autoSyncInterval = Duration(minutes: 3);
@@ -79,6 +84,31 @@ class _DashboardScreenState extends State<DashboardScreen>
       // local mirror is empty (first run), so cold start still loads everything.
       _backgroundSync();
     });
+    _loadAmount();
+  }
+
+  Future<void> _loadAmount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt(_kAmountKey) ?? _kDefaultAmount;
+    if (mounted) _amountCtrl.text = _fmtAmount(saved);
+  }
+
+  Future<void> _onAmountChanged(String raw) async {
+    final digits = raw.replaceAll(',', '');
+    final n = int.tryParse(digits);
+    if (n == null || n <= 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kAmountKey, n);
+  }
+
+  static String _fmtAmount(int v) {
+    final s = v.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
   }
 
   @override
@@ -88,6 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _autoSyncTimer?.cancel();
     _connSub?.cancel();
     _searchCtrl.dispose();
+    _amountCtrl.dispose();
     super.dispose();
   }
 
@@ -204,8 +235,25 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
       body: Column(
         children: [
+          // ── Configurable payment amount (above the search) ───────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 8, 4),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 3),
+            child: TextField(
+              controller: _amountCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [_ThousandsFormatter()],
+              onChanged: _onAmountChanged,
+              decoration: const InputDecoration(
+                labelText: 'ຈຳນວນເງິນຕໍ່ຄັ້ງ (Payment Amount)',
+                suffixText: '₭',
+                prefixIcon: Icon(Icons.payments_outlined),
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 8, 4),
             child: Row(
               children: [
                 Expanded(
@@ -392,6 +440,27 @@ class _Pager extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ThousandsFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return newValue.copyWith(text: '');
+    final n = int.parse(digits);
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    final formatted = buf.toString();
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }
